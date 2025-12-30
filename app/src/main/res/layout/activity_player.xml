@@ -1,0 +1,243 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <!-- Main content -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <EditText
+                android:id="@+id/tuneNameBox"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:inputType="text"
+                android:singleLine="true"
+                android:focusable="false"
+                android:clickable="false"
+                android:longClickable="false" />
+
+
+            <Button
+                android:id="@+id/randomButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Random"
+                android:layout_marginStart="8dp" />
+
+        </LinearLayout>
+
+        <!-- Thumbnails row -->
+        <HorizontalScrollView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp"
+            android:scrollbars="none">
+
+            <LinearLayout
+                android:id="@+id/thumbnailContainer"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal" />
+
+        </HorizontalScrollView>
+
+        <!-- Audio controls -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="4"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/fileNameText"
+                android:layout_width="match_parent"
+                android:layout_height="40dp"
+                android:textSize="16sp"
+                android:textStyle="bold"
+                android:gravity="center"
+                android:maxLines="1"
+                android:ellipsize="end"
+                android:text="No audio file" />
+
+            <ScrollView
+                android:id="@+id/barScrollView"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:fillViewport="true">
+
+                <FrameLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content">
+
+                    <LinearLayout
+                        android:id="@+id/buttonContainer"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical">
+                    </LinearLayout>
+
+                    <!-- Position indicator bar -->
+                    <View
+                        android:id="@+id/positionDot"
+                        android:layout_width="2dp"
+                        android:layout_height="0dp"
+                        android:background="@drawable/position_dot"
+                        android:visibility="invisible" />
+
+                    <!-- Selection overlay for start bar partial highlighting -->
+                    <View
+                        android:id="@+id/startBarOverlay"
+                        android:layout_width="0dp"
+                        android:layout_height="0dp"
+                        android:visibility="invisible" />
+
+                    <!-- Selection overlay for end bar partial highlighting -->
+                    <View
+                        android:id="@+id/endBarOverlay"
+                        android:layout_width="0dp"
+                        android:layout_height="0dp"
+                        android:visibility="invisible" />
+
+                </FrameLayout>
+
+            </ScrollView>
+
+        </LinearLayout>
+
+        <!-- Loop button and fine-tune controls -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:padding="1dp">
+
+            <Button
+                android:id="@+id/loopBtn"
+                android:layout_width="0dp"
+                android:layout_height="40dp"
+                android:layout_weight="1"
+                android:text="⟲"
+                android:textSize="20sp"
+                android:layout_margin="1dp"
+                android:background="@android:color/transparent" />
+
+            <Button
+                android:id="@+id/gotoBtn"
+                android:layout_width="0dp"
+                android:layout_height="40dp"
+                android:layout_weight="1"
+                android:text="⬇️"
+                android:textSize="20sp"
+                android:layout_margin="1dp"
+                android:background="@android:color/transparent" />
+
+            <Button
+                android:id="@+id/fineTunePrevABtn"
+                android:layout_width="0dp"
+                android:layout_height="40dp"
+                android:layout_weight="1"
+                android:text="◀A"
+                android:textSize="13sp"
+                android:layout_margin="1dp" />
+
+            <Button
+                android:id="@+id/fineTuneNextABtn"
+                android:layout_width="0dp"
+                android:layout_height="40dp"
+                android:layout_weight="1"
+                android:text="A▶"
+                android:textSize="13sp"
+                android:layout_margin="1dp" />
+
+            <Button
+                android:id="@+id/shiftSelectionPrevBtn"
+                android:layout_width="0dp"
+                android:layout_height="40dp"
+                android:layout_weight="1"
+                android:text="◀"
+                android:textSize="13sp"
+                android:layout_margin="1dp" />
+
+            <Button
+                android:id="@+id/shiftSelectionNextBtn"
+                android:layout_width="0dp"
+                android:layout_height="40dp"
+                android:layout_weight="1"
+                android:text="▶"
+                android:textSize="13sp"
+                android:layout_margin="1dp" />
+
+            <Button
+                android:id="@+id/fineTunePrevBBtn"
+                android:layout_width="0dp"
+                android:layout_height="40dp"
+                android:layout_weight="1"
+                android:text="◀B"
+                android:textSize="13sp"
+                android:layout_margin="1dp" />
+
+            <Button
+                android:id="@+id/fineTuneNextBBtn"
+                android:layout_width="0dp"
+                android:layout_height="40dp"
+                android:layout_weight="1"
+                android:text="B▶"
+                android:textSize="13sp"
+                android:layout_margin="1dp" />
+        </LinearLayout>
+
+        <!-- Playback speed slider -->
+        <SeekBar
+            android:id="@+id/playbackSpeedSeekBar"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_margin="16dp"
+            android:max="60"
+            android:progress="60"
+            android:min="0" />
+
+        <!-- Stop/Start button -->
+        <Button
+            android:id="@+id/stopStartBtn"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:text="stop | start"
+            android:textSize="24sp"
+            android:textStyle="bold" />
+
+    </LinearLayout>
+
+    <!-- Hidden camera preview surface for fist gesture detection -->
+    <SurfaceView
+        android:id="@+id/cameraSurfaceView"
+        android:layout_width="1dp"
+        android:layout_height="1dp"
+        android:layout_marginStart="-10dp"
+        android:layout_marginTop="-10dp"
+        android:background="@android:color/transparent"
+        android:visibility="visible" />
+
+    <!-- Full-screen image overlay -->
+    <ImageView
+        android:id="@+id/fullScreenImageView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#CC000000"
+        android:scaleType="fitCenter"
+        android:visibility="gone"
+        android:clickable="true"
+        android:contentDescription="Full screen chord sheet" />
+
+</FrameLayout>

@@ -1,0 +1,39 @@
+<svg viewBox="0 0 192 192" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background circle -->
+  <circle cx="96" cy="96" r="96" fill="#2196F3"/>
+  
+  <!-- Tuna body -->
+  <ellipse cx="96" cy="100" rx="55" ry="35" fill="#4A5568"/>
+  
+  <!-- Tuna belly -->
+  <ellipse cx="96" cy="110" rx="45" ry="25" fill="#718096"/>
+  
+  <!-- Dorsal fin -->
+  <path d="M 96 65 L 85 45 L 90 65 L 96 65 Z" fill="#2D3748"/>
+  <path d="M 96 65 L 107 45 L 102 65 L 96 65 Z" fill="#2D3748"/>
+  
+  <!-- Tail fin -->
+  <path d="M 151 100 L 170 85 L 170 115 Z" fill="#2D3748"/>
+  <path d="M 151 95 L 165 90 L 165 110 Z" fill="#4A5568"/>
+  
+  <!-- Pectoral fin -->
+  <path d="M 70 95 L 55 85 L 65 100 Z" fill="#4A5568"/>
+  
+  <!-- Eye -->
+  <circle cx="65" cy="92" r="6" fill="#1A202C"/>
+  <circle cx="67" cy="90" r="2" fill="white"/>
+  
+  <!-- Gill -->
+  <path d="M 78 95 Q 75 100 78 105" stroke="#2D3748" stroke-width="2" fill="none"/>
+  
+  <!-- Body stripes -->
+  <line x1="85" y1="85" x2="85" y2="115" stroke="#2D3748" stroke-width="1.5" opacity="0.3"/>
+  <line x1="95" y1="82" x2="95" y2="118" stroke="#2D3748" stroke-width="1.5" opacity="0.3"/>
+  <line x1="105" y1="85" x2="105" y2="115" stroke="#2D3748" stroke-width="1.5" opacity="0.3"/>
+  <line x1="115" y1="88" x2="115" y2="112" stroke="#2D3748" stroke-width="1.5" opacity="0.3"/>
+  <line x1="125" y1="90" x2="125" y2="110" stroke="#2D3748" stroke-width="1.5" opacity="0.3"/>
+  <line x1="135" y1="93" x2="135" y2="107" stroke="#2D3748" stroke-width="1.5" opacity="0.3"/>
+  
+  <!-- Mouth -->
+  <path d="M 48 100 Q 42 100 40 98" stroke="#1A202C" stroke-width="2" fill="none"/>
+</svg>
