@@ -1,3 +1,4 @@
 .gradle/
 .vscode/
 app/build/
+crash_log.txt
