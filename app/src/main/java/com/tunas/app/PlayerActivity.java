@@ -46,6 +46,7 @@ public class PlayerActivity extends AppCompatActivity {
     private EditText tuneNameBox;
     private Button randomButton;
     private Button stopStartBtn;
+    private Button buttonLess4;
     private SeekBar playbackSpeedSeekBar;
     private LinearLayout thumbnailContainer;
     private ImageView fullScreenImageView;
@@ -317,6 +318,7 @@ public class PlayerActivity extends AppCompatActivity {
         tuneNameBox = findViewById(R.id.tuneNameBox);
         randomButton = findViewById(R.id.randomButton);
         stopStartBtn = findViewById(R.id.stopStartBtn);
+        buttonLess4 = findViewById(R.id.buttonLess4);
         playbackSpeedSeekBar = findViewById(R.id.playbackSpeedSeekBar);
         thumbnailContainer = findViewById(R.id.thumbnailContainer);
         fullScreenImageView = findViewById(R.id.fullScreenImageView);
@@ -368,6 +370,7 @@ public class PlayerActivity extends AppCompatActivity {
         loadTunes();
         setupRandomButton();
         setupStopStartButton();
+        setupLess4Button();
         setupPlaybackSpeedSeekBar();
         setupLoopButton();
         setupGotoButton();
@@ -1780,6 +1783,60 @@ public class PlayerActivity extends AppCompatActivity {
                 if (randomTune != null) {
                     openTune(randomTune);
                 }
+            }
+        });
+    }
+
+    private void setupLess4Button() {
+        if (buttonLess4 == null) {
+            return;
+        }
+
+        buttonLess4.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                if (exoPlayer == null || barPositions == null || barPositions.isEmpty()) {
+                    return;
+                }
+                long selectionStartMs = calculateSelectionStartMs();
+                long positionInSegment = getCurrentPositionInSegment();
+                long absoluteMs = currentMediaSourceStartMs + positionInSegment;
+
+                // Find current bar index (last bar where bar start <= absoluteMs)
+                int currentBarIndex = -1;
+                for (int i = 0; i < barPositions.size(); i++) {
+                    if (absoluteMs >= barPositions.get(i)) {
+                        currentBarIndex = i;
+                    } else {
+                        break;
+                    }
+                }
+
+                double progressInBar = 0.0;
+                if (currentBarIndex >= 0) {
+                    long barStartMs = barPositions.get(currentBarIndex);
+                    long barEndMs = (currentBarIndex + 1 < barPositions.size()) ?
+                        barPositions.get(currentBarIndex + 1) : audioDuration;
+                    if (barEndMs > barStartMs) {
+                        progressInBar = (double) (absoluteMs - barStartMs) / (barEndMs - barStartMs);
+                        progressInBar = Math.max(0.0, Math.min(1.0, progressInBar));
+                    }
+                }
+
+                int targetBarIndex = currentBarIndex - 4;
+                long targetAbsoluteMs;
+                if (currentBarIndex < 0 || targetBarIndex < selectionStartBar) {
+                    targetAbsoluteMs = selectionStartMs;
+                } else {
+                    long targetBarStartMs = barPositions.get(targetBarIndex);
+                    long targetBarEndMs = (targetBarIndex + 1 < barPositions.size()) ?
+                        barPositions.get(targetBarIndex + 1) : audioDuration;
+                    targetAbsoluteMs = targetBarStartMs + (long) (progressInBar * (targetBarEndMs - targetBarStartMs));
+                }
+
+                long seekPositionMs = targetAbsoluteMs - selectionStartMs;
+                exoPlayer.seekTo(seekPositionMs);
+                updatePositionDot(exoPlayer.getCurrentPosition());
             }
         });
     }

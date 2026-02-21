@@ -207,15 +207,31 @@
             android:progress="60"
             android:min="0" />
 
-        <!-- Stop/Start button -->
-        <Button
-            android:id="@+id/stopStartBtn"
+        <!-- <4 button and Stop/Start button -->
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="0dp"
             android:layout_weight="1"
-            android:text="stop | start"
-            android:textSize="24sp"
-            android:textStyle="bold" />
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/buttonLess4"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:text="&lt;4"
+                android:textSize="24sp"
+                android:textStyle="bold" />
+
+            <Button
+                android:id="@+id/stopStartBtn"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="3"
+                android:text="stop | start"
+                android:textSize="24sp"
+                android:textStyle="bold" />
+        </LinearLayout>
 
     </LinearLayout>
 
