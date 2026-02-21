@@ -47,6 +47,7 @@ public class PlayerActivity extends AppCompatActivity {
     private Button randomButton;
     private Button stopStartBtn;
     private Button buttonLess4;
+    private Button buttonToggle4;
     private SeekBar playbackSpeedSeekBar;
     private LinearLayout thumbnailContainer;
     private ImageView fullScreenImageView;
@@ -87,7 +88,7 @@ public class PlayerActivity extends AppCompatActivity {
 
     private boolean isStopped = true;
     private boolean loopOn = false;
-    private boolean gotoOn = false;
+    private boolean gotoOn = true;
 
     // Position tracking
     private Runnable positionUpdateRunnable;
@@ -319,6 +320,7 @@ public class PlayerActivity extends AppCompatActivity {
         randomButton = findViewById(R.id.randomButton);
         stopStartBtn = findViewById(R.id.stopStartBtn);
         buttonLess4 = findViewById(R.id.buttonLess4);
+        buttonToggle4 = findViewById(R.id.buttonToggle4);
         playbackSpeedSeekBar = findViewById(R.id.playbackSpeedSeekBar);
         thumbnailContainer = findViewById(R.id.thumbnailContainer);
         fullScreenImageView = findViewById(R.id.fullScreenImageView);
@@ -371,6 +373,7 @@ public class PlayerActivity extends AppCompatActivity {
         setupRandomButton();
         setupStopStartButton();
         setupLess4Button();
+        setupToggle4Button();
         setupPlaybackSpeedSeekBar();
         setupLoopButton();
         setupGotoButton();
@@ -642,7 +645,7 @@ public class PlayerActivity extends AppCompatActivity {
     }
 
     private void setupGotoButton() {
-        // Set initial state - goto disabled
+        // Set initial state - goto enabled by default
         updateGotoButtonState();
 
         gotoBtn.setOnClickListener(new View.OnClickListener() {
@@ -651,6 +654,21 @@ public class PlayerActivity extends AppCompatActivity {
                 // Toggle goto on/off
                 gotoOn = !gotoOn;
                 updateGotoButtonState();
+            }
+        });
+
+        gotoBtn.setOnLongClickListener(new View.OnLongClickListener() {
+            @Override
+            public boolean onLongClick(View v) {
+                // Select all bars and enable down arrow (goto mode)
+                if (barPositions != null && !barPositions.isEmpty()) {
+                    int endBar = barPositions.size() - 1;
+                    highlightBars(0, endBar, 0, 11);
+                    handlePlaybackAfterSelectionChange(0, endBar, 0, 11);
+                }
+                gotoOn = true;
+                updateGotoButtonState();
+                return true; // Consume the event
             }
         });
     }
@@ -1837,6 +1855,47 @@ public class PlayerActivity extends AppCompatActivity {
                 long seekPositionMs = targetAbsoluteMs - selectionStartMs;
                 exoPlayer.seekTo(seekPositionMs);
                 updatePositionDot(exoPlayer.getCurrentPosition());
+            }
+        });
+    }
+
+    private void setupToggle4Button() {
+        if (buttonToggle4 == null) {
+            return;
+        }
+        buttonToggle4.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                if (barPositions == null || barPositions.isEmpty()) {
+                    return;
+                }
+                int numBars = barPositions.size();
+                boolean wholeTuneSelected = (selectionStartBar == 0 && selectionEndBar == numBars - 1);
+
+                if (wholeTuneSelected) {
+                    // Select 4 bars starting from current bar
+                    long positionInSegment = getCurrentPositionInSegment();
+                    long absoluteMs = currentMediaSourceStartMs + positionInSegment;
+                    int currentBarIndex = -1;
+                    for (int i = 0; i < barPositions.size(); i++) {
+                        if (absoluteMs >= barPositions.get(i)) {
+                            currentBarIndex = i;
+                        } else {
+                            break;
+                        }
+                    }
+                    if (currentBarIndex < 0) {
+                        currentBarIndex = 0;
+                    }
+                    int startBar = currentBarIndex;
+                    int endBar = Math.min(currentBarIndex + 3, numBars - 1);
+                    highlightBars(startBar, endBar, 0, 11);
+                    handlePlaybackAfterSelectionChange(startBar, endBar, 0, 11);
+                } else {
+                    // Select whole tune
+                    highlightBars(0, numBars - 1, 0, 11);
+                    handlePlaybackAfterSelectionChange(0, numBars - 1, 0, 11);
+                }
             }
         });
     }
