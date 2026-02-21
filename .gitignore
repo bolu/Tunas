@@ -2,3 +2,4 @@
 .vscode/
 app/build/
 crash_log.txt
+make_tuna/__pycache__
