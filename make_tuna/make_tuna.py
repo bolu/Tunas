@@ -153,6 +153,25 @@ def fill_ellipsis(sections, bars):
 def detect_bars_transcribe(input_file, output_ogg, output_xsc, spec):
     """Detect bars and output in Transcribe format, plus audio with clicks."""
 
+    # Check for meters_given mode and validate conditions
+    meters_given = spec.get('meters_given', False)
+    if meters_given:
+        sections = spec.get('sections')
+        if sections is None:
+            print("Error: meters_given mode requires sections to be defined in the spec")
+            sys.exit(1)
+
+        # Check that ellipsis is not used
+        if ... in sections:
+            print("Error: meters_given mode does not support ellipsis (...) in sections")
+            sys.exit(1)
+
+        # Check that each section consists of three elements: [name, number of bars, meter]
+        for i, section in enumerate(sections):
+            if not isinstance(section, list) or len(section) != 3:
+                print(f"Error: In meters_given mode, section {i} must be a list of 3 elements [name, number_of_bars, meter], got: {section}")
+                sys.exit(1)
+
     beats_per_bar = spec.get('meters', [4])
     tempo = spec.get('tempo')
 
@@ -201,9 +220,31 @@ def detect_bars_transcribe(input_file, output_ogg, output_xsc, spec):
     )
     act = madmom.features.downbeats.RNNDownBeatProcessor()(temp_path)
     downbeats = proc(act)
-    
-    # Extract bar positions (downbeats)
-    bar_times = downbeats[downbeats[:, 1] == 1][:, 0]
+
+    # Extract bar positions
+    if meters_given:
+        # In meters_given mode, use section definitions to determine bar times
+        sections = spec.get('sections')
+        bar_times = []
+        beat_idx = 0
+
+        for section_name, num_bars, meter in sections:
+            # For each bar in this section
+            for _ in range(num_bars):
+                if beat_idx >= len(downbeats):
+                    print(f"Warning: Not enough beats detected for section {section_name}")
+                    break
+
+                # The first beat of each bar is the bar start time
+                bar_times.append(downbeats[beat_idx, 0])
+
+                # Skip to the next bar (meter beats per bar)
+                beat_idx += meter
+
+        bar_times = np.array(bar_times)
+    else:
+        # Standard mode: extract bar positions from downbeats
+        bar_times = downbeats[downbeats[:, 1] == 1][:, 0]
 
     # Extract all beat positions if beat_click is enabled
     beat_times = None
@@ -290,7 +331,7 @@ def write_xsc_file(time_strings, output_ogg, output_xsc, spec):
 
     sections = fill_ellipsis(sections, len(left))
     for section in sections:
-        section_name, section_length = section
+        section_name, section_length = section[:2]
         for i in range(section_length):
             time_str = left.pop()
             marker = 'S' if i == 0 else 'M'
