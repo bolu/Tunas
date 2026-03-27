@@ -34,7 +34,9 @@ import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileReader;
 import java.io.IOException;
+import java.io.RandomAccessFile;
 import java.lang.reflect.Type;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -1026,7 +1028,7 @@ public class PlayerActivity extends AppCompatActivity {
         // Create buttons with section markers and horizontal dividers
         int sectionButtonNumber = 1; // Button number within current section
         int sectionIndex = 0; // Section counter for naming
-        int buttonsPerRow = 4;
+        int buttonsPerRow = 8;
         int currentRowButtonCount = 0;
         LinearLayout currentRowLayout = null;
 
@@ -1044,7 +1046,7 @@ public class PlayerActivity extends AppCompatActivity {
 
                 // Add horizontal divider with section name
                 String sectionName = sectionNames.get(i);
-                View divider = createSectionDivider(sectionName, sectionIndex);
+                View divider = createSectionDivider(sectionName, sectionIndex, i);
                 buttonContainer.addView(divider);
                 sectionIndex++;
 
@@ -1119,7 +1121,7 @@ public class PlayerActivity extends AppCompatActivity {
         }
     }
 
-    private View createSectionDivider(String rawSectionName, int sectionIndex) {
+    private View createSectionDivider(String rawSectionName, int sectionIndex, int sectionStartBarIndex) {
         // Determine display name: use raw name if meaningful, otherwise "Section N"
         String displayName;
         if (rawSectionName != null && !rawSectionName.isEmpty() && !rawSectionName.equals("1")) {
@@ -1159,6 +1161,63 @@ public class PlayerActivity extends AppCompatActivity {
         LinearLayout.LayoutParams textParams = new LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         sectionText.setLayoutParams(textParams);
+        sectionText.setTag(Integer.valueOf(sectionStartBarIndex));
+
+        sectionText.setOnLongClickListener(new View.OnLongClickListener() {
+            @Override
+            public boolean onLongClick(View v) {
+                if (!gotoOn) {
+                    return false;
+                }
+
+                Object tag = v.getTag();
+                if (!(tag instanceof Integer)) {
+                    return false;
+                }
+                final int barIndex = (Integer) tag;
+
+                // Safety checks around current data
+                if (barPositions == null || isSectionMarker == null || sectionNames == null) {
+                    return false;
+                }
+                if (barIndex < 0 || barIndex >= barPositions.size()) {
+                    return false;
+                }
+                if (!isSectionMarker.get(barIndex)) {
+                    return false;
+                }
+
+                // Build dialog asking for new section name
+                final EditText input = new EditText(PlayerActivity.this);
+                String currentRawName = sectionNames.get(barIndex);
+                if (currentRawName != null) {
+                    input.setText(currentRawName);
+                    input.setSelection(currentRawName.length());
+                }
+
+                new AlertDialog.Builder(PlayerActivity.this)
+                    .setTitle("Rename section")
+                    .setMessage("Enter new section name:")
+                    .setView(input)
+                    .setPositiveButton("OK", (dialog, which) -> {
+                        String newName = input.getText().toString().trim();
+                        // Update in-memory model
+                        if (newName.isEmpty()) {
+                            sectionNames.set(barIndex, null);
+                            ((TextView) v).setText("Section " + (sectionIndex + 1));
+                        } else {
+                            sectionNames.set(barIndex, newName);
+                            ((TextView) v).setText(newName);
+                        }
+                        // Persist to XSC without recreating file
+                        saveSectionNameToXscFileForCurrentAudio(barIndex, newName);
+                    })
+                    .setNegativeButton("Cancel", (dialog, which) -> dialog.dismiss())
+                    .show();
+
+                return true;
+            }
+        });
         dividerContainer.addView(sectionText);
 
         // Right line
@@ -1481,6 +1540,48 @@ public class PlayerActivity extends AppCompatActivity {
             return;
         }
 
+        // When goto/down-arrow mode is active, long-press toggles section start at this bar.
+        // If this bar is already the first bar of a section, "do the opposite" and remove the section start here.
+        if (gotoOn) {
+            if (isSectionMarker == null || isSectionMarker.size() != barPositions.size()) {
+                Log.d("Tunas", "onBarLongClicked: section markers not initialized (size mismatch), ignoring");
+                return;
+            }
+
+            boolean currentlySectionStart = isSectionMarker.get(barIndex);
+            boolean nowSectionStart = !currentlySectionStart;
+            isSectionMarker.set(barIndex, nowSectionStart);
+
+            // Persist the toggle by changing just the leading marker type char in the XSC.
+            saveMarkerTypeToXscFileForCurrentAudio(barIndex, nowSectionStart ? 'S' : 'M');
+
+            /*
+            if (sectionNames != null && sectionNames.size() == barPositions.size()) {
+                // User-created section starts have no special name by default.
+                sectionNames.set(barIndex, !currentlySectionStart ? null : null);
+            }
+            */
+
+            Log.d("Tunas", "onBarLongClicked (goto): bar " + barIndex +
+                  (currentlySectionStart ? " is no longer" : " is now") + " a section start");
+
+            // Rebuild the button grid so section dividers/numbering update.
+            createButtonGrid();
+            setupBarButtons();
+
+            // Re-apply highlight after layout is complete.
+            View buttonContainer = findViewById(R.id.buttonContainer);
+            if (buttonContainer != null) {
+                buttonContainer.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        highlightBars(selectionStartBar, selectionEndBar, selectionStartTwelfths, selectionEndTwelfths);
+                    }
+                });
+            }
+            return;
+        }
+
         // Set the long-clicked bar as point B (end of selection), keep point A unchanged
         int newEndBar = barIndex;
 
@@ -1494,6 +1595,208 @@ public class PlayerActivity extends AppCompatActivity {
 
         // Handle the selection change with all associated logic
         handlePlaybackAfterSelectionChange(selectionStartBar, newEndBar, selectionStartTwelfths, 11);
+    }
+
+    private File getXscFileForAudioIndex(int audioIndex) {
+        if (audioFiles == null || audioFiles.isEmpty() || audioIndex < 0 || audioIndex >= audioFiles.size()) {
+            return null;
+        }
+        File audioFile = audioFiles.get(audioIndex);
+        String audioName = audioFile.getName();
+        int dot = audioName.lastIndexOf('.');
+        if (dot <= 0) {
+            return null;
+        }
+        String baseName = audioName.substring(0, dot);
+        return new File(audioFile.getParent(), baseName + ".xsc");
+    }
+
+    private void saveMarkerTypeToXscFileForCurrentAudio(int barIndex, char markerType) {
+        if (barPositions == null || barIndex < 0 || barIndex >= barPositions.size()) {
+            Log.d("Tunas", "saveMarkerTypeToXscFileForCurrentAudio: invalid barIndex=" + barIndex);
+            return;
+        }
+
+        File xscFile = getXscFileForAudioIndex(currentAudioIndex);
+        if (xscFile == null) {
+            Log.d("Tunas", "saveMarkerTypeToXscFileForCurrentAudio: cannot determine xsc file for current audio");
+            return;
+        }
+
+        // Contract: NEVER rewrite the file. Only do a one-character in-place change.
+        if (!xscFile.exists() || !xscFile.isFile()) {
+            Log.d("Tunas", "saveMarkerTypeToXscFileForCurrentAudio: xsc file missing/unreadable: " +
+                  (xscFile.exists() ? "exists but not a file" : "does not exist"));
+            return;
+        }
+
+        try (RandomAccessFile raf = new RandomAccessFile(xscFile, "rw")) {
+            boolean inMarkers = false;
+            int markerLineCount = 0;
+
+            while (true) {
+                long lineStartPos = raf.getFilePointer();
+                String line = raf.readLine();
+                if (line == null) break;
+
+                String trimmed = line.trim();
+                if (trimmed.equals("SectionStart,Markers")) {
+                    inMarkers = true;
+                    markerLineCount = 0;
+                    continue;
+                }
+
+                if (trimmed.equals("SectionEnd,Markers")) {
+                    inMarkers = false;
+                    continue;
+                }
+                if (!inMarkers) continue;
+
+                if (trimmed.startsWith("S,") || trimmed.startsWith("M,")) {
+                    if (markerLineCount == barIndex) {
+                        int firstNonWs = 0;
+                        while (firstNonWs < line.length() && Character.isWhitespace(line.charAt(firstNonWs))) {
+                            firstNonWs++;
+                        }
+                        if (firstNonWs >= line.length()) {
+                            Log.d("Tunas", "saveMarkerTypeToXscFileForCurrentAudio: empty marker line for barIndex=" +
+                                  barIndex + ", not updating");
+                            return;
+                        }
+
+                        raf.seek(lineStartPos + firstNonWs);
+                        raf.writeByte((byte) markerType);
+                        Log.d("Tunas", "saveMarkerTypeToXscFileForCurrentAudio: updated bar " + barIndex +
+                              " to '" + markerType + "' in " + xscFile.getAbsolutePath());
+                        return;
+                    }
+                    markerLineCount++;
+                }
+            }
+        } catch (IOException e) {
+            Log.d("Tunas", "saveMarkerTypeToXscFileForCurrentAudio: failed updating xsc: " + e.getMessage());
+        }
+
+        Log.d("Tunas", "saveMarkerTypeToXscFileForCurrentAudio: marker not found for barIndex=" + barIndex +
+              ", not updating");
+    }
+
+    private void saveSectionNameToXscFileForCurrentAudio(int barIndex, String newName) {
+        if (barPositions == null || barIndex < 0 || barIndex >= barPositions.size()) {
+            Log.d("Tunas", "saveSectionNameToXscFileForCurrentAudio: invalid barIndex=" + barIndex);
+            return;
+        }
+
+        File xscFile = getXscFileForAudioIndex(currentAudioIndex);
+        if (xscFile == null) {
+            Log.d("Tunas", "saveSectionNameToXscFileForCurrentAudio: cannot determine xsc file for current audio");
+            return;
+        }
+
+        // Never recreate the file. Only perform edits within this file.
+        if (!xscFile.exists() || !xscFile.isFile()) {
+            Log.d("Tunas", "saveSectionNameToXscFileForCurrentAudio: xsc file missing/unreadable: " +
+                  (xscFile.exists() ? "exists but not a file" : "does not exist"));
+            return;
+        }
+
+        try (RandomAccessFile raf = new RandomAccessFile(xscFile, "rw")) {
+            boolean inMarkers = false;
+            int markerLineCount = 0;
+
+            while (true) {
+                long lineStartPos = raf.getFilePointer();
+                String line = raf.readLine();
+                if (line == null) break;
+
+                String trimmed = line.trim();
+                if (trimmed.equals("SectionStart,Markers")) {
+                    inMarkers = true;
+                    markerLineCount = 0;
+                    continue;
+                }
+                if (trimmed.equals("SectionEnd,Markers")) {
+                    inMarkers = false;
+                    continue;
+                }
+                if (!inMarkers) continue;
+
+                if (trimmed.startsWith("S,") || trimmed.startsWith("M,")) {
+                    if (markerLineCount == barIndex) {
+                        // We expect a line like: S,-1,0,Section name,1,0:00:00.060000
+                        int firstNonWs = 0;
+                        while (firstNonWs < line.length() && Character.isWhitespace(line.charAt(firstNonWs))) {
+                            firstNonWs++;
+                        }
+                        if (firstNonWs >= line.length()) {
+                            Log.d("Tunas", "saveSectionNameToXscFileForCurrentAudio: empty marker line for barIndex=" +
+                                  barIndex);
+                            return;
+                        }
+
+                        // Find commas delimiting the name field
+                        int firstComma = line.indexOf(',', firstNonWs);
+                        if (firstComma < 0) return;
+                        int secondComma = line.indexOf(',', firstComma + 1);
+                        if (secondComma < 0) return;
+                        int thirdComma = line.indexOf(',', secondComma + 1);
+                        if (thirdComma < 0) return;
+                        int nameStart = thirdComma + 1;
+                        int nameEnd = line.indexOf(',', nameStart);
+                        if (nameEnd < 0 || nameEnd <= nameStart) {
+                            Log.d("Tunas", "saveSectionNameToXscFileForCurrentAudio: cannot locate name field for barIndex=" +
+                                  barIndex);
+                            return;
+                        }
+
+                        // Build new line with arbitrary-length section name.
+                        String targetName = (newName == null) ? "" : newName;
+                        StringBuilder newLineBuilder = new StringBuilder();
+                        newLineBuilder.append(line, 0, nameStart);
+                        newLineBuilder.append(targetName);
+                        newLineBuilder.append(line.substring(nameEnd));
+                        String newLine = newLineBuilder.toString();
+
+                        // Work out original newline sequence length so we preserve it.
+                        long afterLinePos = raf.getFilePointer();
+                        long originalLineBytes = line.length();
+                        long newlineLen = afterLinePos - lineStartPos - originalLineBytes;
+                        String newlineStr;
+                        if (newlineLen == 2) {
+                            newlineStr = "\r\n";
+                        } else if (newlineLen == 1) {
+                            newlineStr = "\n";
+                        } else {
+                            // Fallback – shouldn't normally happen, but don't break the file.
+                            newlineStr = System.lineSeparator();
+                        }
+
+                        byte[] lineBytes = (newLine + newlineStr).getBytes(StandardCharsets.US_ASCII);
+
+                        // Read the rest of the file after this line so we can shift it if needed.
+                        long fileLength = raf.length();
+                        int remaining = (int) (fileLength - afterLinePos);
+                        byte[] tail = new byte[remaining];
+                        raf.readFully(tail);
+
+                        // Rewrite from the start of this line: new line + the untouched tail.
+                        raf.seek(lineStartPos);
+                        raf.write(lineBytes);
+                        raf.write(tail);
+                        raf.setLength(lineStartPos + lineBytes.length + tail.length);
+
+                        Log.d("Tunas", "saveSectionNameToXscFileForCurrentAudio: updated section name for bar " +
+                              barIndex + " in " + xscFile.getAbsolutePath());
+                        return;
+                    }
+                    markerLineCount++;
+                }
+            }
+        } catch (IOException e) {
+            Log.d("Tunas", "saveSectionNameToXscFileForCurrentAudio: failed updating xsc: " + e.getMessage());
+        }
+
+        Log.d("Tunas", "saveSectionNameToXscFileForCurrentAudio: marker not found for barIndex=" + barIndex);
     }
 
     private void loadBarPositions(int audioIndex) {
@@ -1566,14 +1869,6 @@ public class PlayerActivity extends AppCompatActivity {
                     }
                 }
                 Log.d("Tunas", "loadBarPositions: loaded " + barPositions.size() + " bar positions total");
-
-                // If the first bar is more than 0.2s after the beginning, insert an intro section
-                if (!barPositions.isEmpty() && barPositions.get(0) > 200) {
-                    Log.d("Tunas", "loadBarPositions: first bar is " + barPositions.get(0) + "ms after start, inserting intro section");
-                    barPositions.add(0, 0L); // Insert bar at time 0
-                    isSectionMarker.add(0, true); // Mark as section start
-                    sectionNames.add(0, null); // No special name, will get "Section 1"
-                }
 
                 // showBarFileInfoDialog(barPositions.size(), "XSC file loaded successfully");
             } catch (IOException e) {
