@@ -1771,7 +1771,7 @@ public class PlayerActivity extends AppCompatActivity {
                             newlineStr = System.lineSeparator();
                         }
 
-                        byte[] lineBytes = (newLine + newlineStr).getBytes(StandardCharsets.US_ASCII);
+                        byte[] lineBytes = (newLine + newlineStr).getBytes(StandardCharsets.UTF_8);
 
                         // Read the rest of the file after this line so we can shift it if needed.
                         long fileLength = raf.length();
