@@ -390,7 +390,7 @@ def read_spec(filename):
     except FileNotFoundError:
         print(f"File {filename} not found, creating it...")
         with open(filename, 'w') as f:
-            f.write("{\n'sections': [\n32,\n...,\n],\n}")
+            f.write("{\n'sections': [\n32,\n],\n}")
         return {}
     except (ValueError, SyntaxError) as e:
         print(f"Error parsing file: {e}")
@@ -447,6 +447,12 @@ if len(sys.argv) < 2:
     sys.exit(1)
 
 filename = sys.argv[1]
+
+# Disallow parentheses in the input filename to avoid issues with derived file names.
+if '(' in filename or ')' in filename:
+    print(f"Error: parentheses are not allowed in file names: {filename}")
+    sys.exit(1)
+
 basename = Path(filename).stem
 spec_file = basename + '.tun'
 ogg_file = basename + '.ogg'
