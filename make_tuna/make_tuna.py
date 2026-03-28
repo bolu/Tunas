@@ -350,7 +350,7 @@ def write_xsc_file(bar_times, beat_times, output_wav, output_xsc, spec):
     lines.append("SectionEnd,View0")
     lines.append("")
     lines.append("SectionStart,Markers")
-    lines.append(f"Howmany,{len(time_strings)}")
+    lines.append(f"Howmany,{len(bar_times) + len(beat_times)}")
 
     bars_left = bar_times.copy()
     bars_left.reverse()
