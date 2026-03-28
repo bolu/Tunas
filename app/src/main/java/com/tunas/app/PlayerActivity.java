@@ -1307,6 +1307,7 @@ public class PlayerActivity extends AppCompatActivity {
             DataSource.Factory dataSourceFactory = new com.google.android.exoplayer2.upstream.DefaultDataSource.Factory(this);
 
             // Fallback to simple clipping without looping
+            // This leaks a little bit of audio from following bar, but we don't mind when not looping.
             MediaItem mediaItem = MediaItem.fromUri(android.net.Uri.fromFile(audioFiles.get(currentAudioIndex)));
             ClippingMediaSource clippingSource = new ClippingMediaSource(
                 new com.google.android.exoplayer2.source.ProgressiveMediaSource.Factory(dataSourceFactory)

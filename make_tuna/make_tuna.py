@@ -150,7 +150,7 @@ def fill_ellipsis(sections, bars):
             sections[i][0] = f'Section {i+1}'
     return sections
 
-def detect_bars_transcribe(input_file, output_ogg, output_xsc, spec):
+def detect_bars_transcribe(input_file, output_wav, output_xsc, spec):
     """Detect bars and output in Transcribe format, plus audio with clicks."""
 
     # Check for meters_given mode and validate conditions
@@ -203,10 +203,10 @@ def detect_bars_transcribe(input_file, output_ogg, output_xsc, spec):
 
     audio = normalize(audio)
 
-    # Save to temporary file
-    with tempfile.NamedTemporaryFile(suffix='.ogg', delete=False) as temp_file:
+    # Save to temporary file (full-rate WAV for analysis; removed after run)
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
         temp_path = temp_file.name
-        audio.export(temp_path, format="ogg")
+        audio.export(temp_path, format="wav")
 
     # Process audio for downbeat detection
     print(f"Analyzing audio... {temp_path} {beats_per_bar} {min_bpm} {max_bpm}")
@@ -262,10 +262,10 @@ def detect_bars_transcribe(input_file, output_ogg, output_xsc, spec):
 
     # Generate and write XSC file
     if output_xsc:
-        write_xsc_file(time_strings, output_ogg, output_xsc, spec)
+        write_xsc_file(time_strings, output_wav, output_xsc, spec)
 
     # Generate audio with clicks
-    if output_ogg:
+    if output_wav:
         no_click = spec.get('no_click', False)
         if no_click:
             print("\nGenerating audio without clicks...")
@@ -295,17 +295,19 @@ def detect_bars_transcribe(input_file, output_ogg, output_xsc, spec):
                         position_ms = int(beat_time * 1000)  # Convert to milliseconds
                         audio = audio.overlay(beat_click, position=position_ms)
 
-        # Export the result
-        audio.export(output_ogg, format="ogg")
+        wav_audio = (
+            audio.set_frame_rate(22050).set_channels(1)
+        )
+        wav_audio.export(output_wav, format="wav")
         if no_click:
-            print(f"Audio without clicks saved to {output_ogg}")
+            print(f"Audio without clicks saved to {output_wav}")
         else:
-            print(f"Audio with clicks saved to {output_ogg}")
+            print(f"Audio with clicks saved to {output_wav}")
 
-def write_xsc_file(time_strings, output_ogg, output_xsc, spec):
+def write_xsc_file(time_strings, output_wav, output_xsc, spec):
     """Generate and write XSC file from time strings and spec."""
     sections = spec.get('sections')
-    if sections is None: sections = [32, ...]
+    if sections is None: sections = [32]
 
     # Generate Transcribe format output
     lines = []
@@ -313,7 +315,7 @@ def write_xsc_file(time_strings, output_ogg, output_xsc, spec):
     lines.append("Transcribe!,Windows,9,30,7,S,2")
     lines.append("")
     lines.append("SectionStart,Main")
-    lines.append(f"SoundFileName,{output_ogg},Win,x")
+    lines.append(f"SoundFileName,{output_wav},Win,x")
     lines.append("WindowSize,0|0|0|0,1")
     lines.append("ViewList,1,0,0.00000000")
     lines.append("SectionEnd,Main")
@@ -348,9 +350,9 @@ def write_xsc_file(time_strings, output_ogg, output_xsc, spec):
         f.write(output)
     print(f"Saved to {output_xsc}")
 
-def regenerate_xsc_from_existing(ogg_file, xsc_file, spec):
-    """Regenerate .xsc file from existing markers when both .ogg and .xsc files exist."""
-    print("Both .ogg and .xsc files already exist. Regenerating .xsc file from existing markers...")
+def regenerate_xsc_from_existing(wav_file, xsc_file, spec):
+    """Regenerate .xsc file from existing markers when both .wav and .xsc files exist."""
+    print("Both .wav and .xsc files already exist. Regenerating .xsc file from existing markers...")
 
     # Read existing .xsc file to extract marker times
     marker_times = []
@@ -380,7 +382,7 @@ def regenerate_xsc_from_existing(ogg_file, xsc_file, spec):
         sys.exit(1)
 
     # Use the shared function to regenerate the XSC file
-    write_xsc_file(marker_times, ogg_file, xsc_file, spec)
+    write_xsc_file(marker_times, wav_file, xsc_file, spec)
 
 def read_spec(filename):
     try:
@@ -455,13 +457,13 @@ if '(' in filename or ')' in filename:
 
 basename = Path(filename).stem
 spec_file = basename + '.tun'
-ogg_file = basename + '.ogg'
-xsc_file = basename + '.xsc'
+wav_file = basename + ".wav"
+xsc_file = basename + ".xsc"
 
 spec = read_spec(spec_file)
 
-# Check if both .ogg and .xsc files already exist
-if os.path.exists(ogg_file) and os.path.exists(xsc_file):
-    regenerate_xsc_from_existing(ogg_file, xsc_file, spec)
+# Check if both .wav and .xsc files already exist
+if os.path.exists(wav_file) and os.path.exists(xsc_file):
+    regenerate_xsc_from_existing(wav_file, xsc_file, spec)
 else:
-    detect_bars_transcribe(filename, ogg_file, xsc_file, spec)
+    detect_bars_transcribe(filename, wav_file, xsc_file, spec)
