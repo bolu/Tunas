@@ -467,3 +467,59 @@ if os.path.exists(wav_file) and os.path.exists(xsc_file):
     regenerate_xsc_from_existing(wav_file, xsc_file, spec)
 else:
     detect_bars_transcribe(filename, wav_file, xsc_file, spec)
+
+# --- Spec file format (.tun) ---
+#
+# The spec is a Python literal dict read with ast.literal_eval (same basename as the
+# audio file, extension .tun). Use Python dict/list syntax (single-quoted strings OK).
+#
+# sections (optional, default [32])
+#   Defines how bar markers are grouped and labeled in the Transcribe .xsc output.
+#   The total bar count does not have to match the number of detected bars (last section absorbs
+#   any remainder). Each entry is one of:
+#     - int: bar count for an unnamed section (becomes "Section N").
+#     - [name, bar_count]: named section with that many bars.
+#     - ... (ellipsis): repeat the previous section as many times as fit without
+#       exceeding the total bar count; the repeated section is named "Chorus 1",
+#       "Chorus 2", ... (or "<name> 1", "<name> 2" if the previous section had a name).
+#   In meters_given mode (see below), each section must be
+#     [name, bar_count, meter]
+#   with meter = beats per bar for that section (int). Ellipsis is not allowed in
+#   meters_given mode.
+#
+# meters_given (optional, default False)
+#   If True, bar boundaries follow section definitions: for each section, meter beats
+#   are consumed per bar from the downbeat stream. Requires sections as triples
+#   [name, bar_count, meter].
+#
+# meters (optional, default [4])
+#   Beats per bar passed to madmom downbeat tracking (list, one value or per-bar
+#   pattern as madmom expects).
+#
+# tempo (optional)
+#   If omitted, BPM search range is 55–215. If a number, range is tempo * [0.94, 1.06].
+#   If [min_bpm, max_bpm], that range is used as-is.
+#
+# silence_threshold (optional, default -80.0)
+#   dBFS threshold for trimming leading silence (and trailing unless keep_trailing_silence).
+#
+# keep_trailing_silence (optional, default False)
+#   If truthy, do not trim trailing silence after the leading trim.
+#
+# transition_lambda (optional, default 100)
+#   madmom DBNDownBeatTrackingProcessor transition_lambda.
+#
+# force_equal_spacing (optional)
+#   List of [start, end] intervals. Within each interval (inclusive), intermediate
+#   bar markers are redistributed with equal spacing; first and last markers in the
+#   interval stay fixed. Times use the same string format as below.
+#
+# beat_click (optional)
+#   If truthy, overlay a click on every beat (800 Hz), not only downbeats (1000 Hz).
+#
+# no_click (optional)
+#   If truthy, export .wav without any click overlay.
+#
+# Time strings (force_equal_spacing intervals)
+#   "H:MM.SS" — hours, minutes, and seconds with fractional part in hundredths (not
+#   base-60). Example: "0:22.71" is 22 minutes and 0.71 seconds = 1320.71 s wall time.
