@@ -166,10 +166,26 @@ def detect_bars_transcribe(input_file, output_wav, output_xsc, spec):
             print("Error: meters_given mode does not support ellipsis (...) in sections")
             sys.exit(1)
 
-        # Check that each section consists of three elements: [name, number of bars, meter]
+        # Each section: [name, bar_count, meter_spec] where meter_spec is either an int or a list of bar_count elements
         for i, section in enumerate(sections):
             if not isinstance(section, list) or len(section) != 3:
-                print(f"Error: In meters_given mode, section {i} must be a list of 3 elements [name, number_of_bars, meter], got: {section}")
+                print(f"Error: In meters_given mode, section {i} must be a list of 3 elements [name, number_of_bars, meter_spec], got: {section}")
+                sys.exit(1)
+            _name, bar_count, meter_spec = section
+            if isinstance(meter_spec, int):
+                if meter_spec < 1:
+                    print(f"Error: In meters_given mode, section {i} meter must be >= 1, got: {meter_spec}")
+                    sys.exit(1)
+            elif isinstance(meter_spec, list):
+                if len(meter_spec) != bar_count:
+                    print(f"Error: In meters_given mode, section {i} meter list length ({len(meter_spec)}) must equal bar_count ({bar_count})")
+                    sys.exit(1)
+                for j, m in enumerate(meter_spec):
+                    if not isinstance(m, int) or m < 1:
+                        print(f"Error: In meters_given mode, section {i} bar {j} meter must be a positive int, got: {m}")
+                        sys.exit(1)
+            else:
+                print(f"Error: In meters_given mode, section {i} third element must be int (beats per bar) or a list of per-bar meters, got: {type(meter_spec).__name__}")
                 sys.exit(1)
 
     beats_per_bar = spec.get('meters', [4])
@@ -221,22 +237,31 @@ def detect_bars_transcribe(input_file, output_wav, output_xsc, spec):
     act = madmom.features.downbeats.RNNDownBeatProcessor()(temp_path)
     downbeats = proc(act)
 
-    # Extract bar positions
+    # Extract bar positions (and subdivision beat times for XSC when beat_markers)
     if meters_given:
         # In meters_given mode, use section definitions to determine bar times
         sections = spec.get('sections')
         bar_times = []
+        beat_times = []
         beat_idx = 0
 
-        for section_name, num_bars, meter in sections:
-            # For each bar in this section
-            for _ in range(num_bars):
+        for section_name, num_bars, meter_spec in sections:
+            if isinstance(meter_spec, int):
+                meters_per_bar = [meter_spec] * num_bars
+            else:
+                meters_per_bar = meter_spec
+
+            for meter in meters_per_bar:
                 if beat_idx >= len(downbeats):
                     print(f"Warning: Not enough beats detected for section {section_name}")
                     break
 
                 # The first beat of each bar is the bar start time
                 bar_times.append(downbeats[beat_idx, 0])
+                if spec.get('beat_markers'):
+                    for off in range(1, meter):
+                        if beat_idx + off < len(downbeats):
+                            beat_times.append(downbeats[beat_idx + off, 0])
 
                 # Skip to the next bar (meter beats per bar)
                 beat_idx += meter
@@ -245,11 +270,13 @@ def detect_bars_transcribe(input_file, output_wav, output_xsc, spec):
     else:
         # Standard mode: extract bar positions from downbeats
         bar_times = downbeats[downbeats[:, 1] == 1][:, 0]
+        if spec.get('beat_markers'):
+            beat_times = downbeats[downbeats[:, 1] > 1][:, 0].tolist()
 
     # Extract all beat positions if beat_click is enabled
-    beat_times = None
+    click_beat_times = None
     if spec.get('beat_click'):
-        beat_times = downbeats[downbeats[:, 1] > 0][:, 0]
+        click_beat_times = downbeats[downbeats[:, 1] > 0][:, 0]
 
     # Apply force equal spacing if specified
     force_equal_spacing = spec.get('force_equal_spacing')
@@ -257,12 +284,9 @@ def detect_bars_transcribe(input_file, output_wav, output_xsc, spec):
         print("Applying force equal spacing...")
         bar_times = apply_force_equal_spacing(bar_times, force_equal_spacing)
 
-    # Convert bar times to time strings
-    time_strings = [seconds_to_transcribe_time(t) for t in bar_times]
-
     # Generate and write XSC file
     if output_xsc:
-        write_xsc_file(time_strings, output_wav, output_xsc, spec)
+        write_xsc_file(bar_times, beat_times, output_wav, output_xsc, spec)
 
     # Generate audio with clicks
     if output_wav:
@@ -282,7 +306,7 @@ def detect_bars_transcribe(input_file, output_wav, output_xsc, spec):
                 audio = audio.overlay(downbeat_click, position=position_ms)
 
             # Generate additional beat clicks if beat_click is enabled
-            if spec.get('beat_click') and beat_times is not None:
+            if spec.get('beat_click') and click_beat_times is not None:
                 print("Adding beat clicks...")
                 beat_click = generate_click(800)
 
@@ -290,7 +314,7 @@ def detect_bars_transcribe(input_file, output_wav, output_xsc, spec):
                 bar_times_set = set(bar_times)
 
                 # Overlay beat clicks at each beat position (excluding downbeats)
-                for beat_time in beat_times:
+                for beat_time in click_beat_times:
                     if beat_time not in bar_times_set:
                         position_ms = int(beat_time * 1000)  # Convert to milliseconds
                         audio = audio.overlay(beat_click, position=position_ms)
@@ -304,7 +328,7 @@ def detect_bars_transcribe(input_file, output_wav, output_xsc, spec):
         else:
             print(f"Audio with clicks saved to {output_wav}")
 
-def write_xsc_file(time_strings, output_wav, output_xsc, spec):
+def write_xsc_file(bar_times, beat_times, output_wav, output_xsc, spec):
     """Generate and write XSC file from time strings and spec."""
     sections = spec.get('sections')
     if sections is None: sections = [32]
@@ -328,21 +352,28 @@ def write_xsc_file(time_strings, output_wav, output_xsc, spec):
     lines.append("SectionStart,Markers")
     lines.append(f"Howmany,{len(time_strings)}")
 
-    left = time_strings.copy()
-    left.reverse()
+    bars_left = bar_times.copy()
+    bars_left.reverse()
 
-    sections = fill_ellipsis(sections, len(left))
+    beats_left = beat_times.copy()
+    beats_left.reverse()
+
+    sections = fill_ellipsis(sections, len(bar_times))
     for section in sections:
         section_name, section_length = section[:2]
         for i in range(section_length):
-            time_str = left.pop()
+            while len(beats_left) and beats_left[-1] < bars_left[-1]:
+                time_str = seconds_to_transcribe_time(beats_left.pop())
+                lines.append(f"B,-1,0,b,1,{time_str}")
+            time_str = seconds_to_transcribe_time(bars_left.pop())
             marker = 'S' if i == 0 else 'M'
             label = section_name if i == 0 else i+1
             generate = 0
             lines.append(f"{marker},-1,{generate},{label},1,{time_str}")
-
+    while len(beats_left):
+        time_str = seconds_to_transcribe_time(beats_left.pop())
+        lines.append(f"B,-1,0,b,1,{time_str}")
     lines.append("SectionEnd,Markers")
-
     output = "\n".join(lines)
 
     # Write to file
@@ -352,8 +383,12 @@ def write_xsc_file(time_strings, output_wav, output_xsc, spec):
 
 def regenerate_xsc_from_existing(wav_file, xsc_file, spec):
     """Regenerate .xsc file from existing markers when both .wav and .xsc files exist."""
-    print("Both .wav and .xsc files already exist. Regenerating .xsc file from existing markers...")
+    if spec.get('beat_markers'):
+        print("Error: XSC regeneration is not supported when beat_markers is enabled.")
+        print("Turn off beat_markers in the .tun spec, or delete the .xsc (and optionally .wav) to rebuild from the source audio.")
+        sys.exit(1)
 
+    print("Both .wav and .xsc files already exist. Regenerating .xsc file from existing markers...")
     # Read existing .xsc file to extract marker times
     marker_times = []
     try:
@@ -382,7 +417,7 @@ def regenerate_xsc_from_existing(wav_file, xsc_file, spec):
         sys.exit(1)
 
     # Use the shared function to regenerate the XSC file
-    write_xsc_file(marker_times, wav_file, xsc_file, spec)
+    write_xsc_file(marker_times, [], wav_file, xsc_file, spec)
 
 def read_spec(filename):
     try:
@@ -473,7 +508,7 @@ else:
 # The spec is a Python literal dict read with ast.literal_eval (same basename as the
 # audio file, extension .tun). Use Python dict/list syntax (single-quoted strings OK).
 #
-# sections (optional, default [32])
+# sections (default [32])
 #   Defines how bar markers are grouped and labeled in the Transcribe .xsc output.
 #   The total bar count does not have to match the number of detected bars (last section absorbs
 #   any remainder). Each entry is one of:
@@ -482,42 +517,47 @@ else:
 #     - ... (ellipsis): repeat the previous section as many times as fit without
 #       exceeding the total bar count; the repeated section is named "Chorus 1",
 #       "Chorus 2", ... (or "<name> 1", "<name> 2" if the previous section had a name).
-#   In meters_given mode (see below), each section must be
+#   In meters_given mode (see below), each section must be a triple:
 #     [name, bar_count, meter]
-#   with meter = beats per bar for that section (int). Ellipsis is not allowed in
-#   meters_given mode.
+#   with meter = beats per bar for every bar in the section (int), or
+#     [name, bar_count, [meter_bar_1, meter_bar_2, ..., meter_bar_bar_count]]
+#   when the time signature varies bar by bar (list length must equal bar_count).
+#   Ellipsis is not allowed in meters_given mode.
 #
-# meters_given (optional, default False)
-#   If True, bar boundaries follow section definitions: for each section, meter beats
-#   are consumed per bar from the downbeat stream. Requires sections as triples
-#   [name, bar_count, meter].
+# meters_given (default False)
+#   If True, bar boundaries follow section definitions: for each bar, the given number
+#   of beats are consumed from the downbeat stream. Sections are [name, bar_count, meter]
+#   with meter int or a list of bar_count ints.
 #
-# meters (optional, default [4])
+# meters (default [4])
 #   Beats per bar passed to madmom downbeat tracking (list, one value or per-bar
 #   pattern as madmom expects).
 #
-# tempo (optional)
+# tempo (default [55, 215])
 #   If omitted, BPM search range is 55–215. If a number, range is tempo * [0.94, 1.06].
 #   If [min_bpm, max_bpm], that range is used as-is.
 #
-# silence_threshold (optional, default -80.0)
+# silence_threshold (default -80.0)
 #   dBFS threshold for trimming leading silence (and trailing unless keep_trailing_silence).
 #
-# keep_trailing_silence (optional, default False)
+# keep_trailing_silence (default False)
 #   If truthy, do not trim trailing silence after the leading trim.
 #
-# transition_lambda (optional, default 100)
+# transition_lambda (default 100)
 #   madmom DBNDownBeatTrackingProcessor transition_lambda.
 #
-# force_equal_spacing (optional)
+# force_equal_spacing (default False)
 #   List of [start, end] intervals. Within each interval (inclusive), intermediate
 #   bar markers are redistributed with equal spacing; first and last markers in the
 #   interval stay fixed. Times use the same string format as below.
 #
-# beat_click (optional)
+# beat_click (default False)
 #   If truthy, overlay a click on every beat (800 Hz), not only downbeats (1000 Hz).
 #
-# no_click (optional)
+# beat_markers (default False)
+#   If truthy, emit a beat marker to XSC file for every beat (in addition to bar markers).
+#
+# no_click (default False)
 #   If truthy, export .wav without any click overlay.
 #
 # Time strings (force_equal_spacing intervals)

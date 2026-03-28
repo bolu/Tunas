@@ -1839,6 +1839,14 @@ public class PlayerActivity extends AppCompatActivity {
                     } else if (line.equals("SectionEnd,Markers")) {
                         inMarkersSection = false;
                         Log.d("Tunas", "loadBarPositions: exited markers section");
+                    } else if (inMarkersSection && line.startsWith("B,")) {
+                        barPositions.clear();
+                        isSectionMarker.clear();
+                        sectionNames.clear();
+                        Log.d("Tunas", "loadBarPositions: XSC contains beat markers (B,); not supported");
+                        showBarFileInfoDialog(0,
+                            "This tune's XSC file includes beat markers (lines starting with B). Tunas does not support those; use make_tuna without beat_markers or remove them in Transcribe.");
+                        break;
                     } else if (inMarkersSection && (line.startsWith("S,") || line.startsWith("M,"))) {
                         // Parse marker line like: S,-1,0,Section name,1,0:00:00.060000
                         String[] parts = line.split(",");
