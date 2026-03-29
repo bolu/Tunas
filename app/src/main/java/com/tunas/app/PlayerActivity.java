@@ -407,7 +407,7 @@ public class PlayerActivity extends AppCompatActivity {
                     if (name.endsWith(".jpg") || name.endsWith(".jpeg") ||
                         name.endsWith(".png") || name.endsWith(".gif")) {
                         imageFiles.add(file);
-                    } else if (name.endsWith(".ogg") || name.endsWith(".m4a")) {
+                    } else if (name.endsWith(".ogg") || name.endsWith(".m4a") || name.endsWith(".wav")) {
                         audioFiles.add(file);
                     }
                 }
@@ -415,21 +415,19 @@ public class PlayerActivity extends AppCompatActivity {
         }
 
         Collections.sort(imageFiles);
-        // Sort audio files with OGG files before M4A files
+        // Sort audio files with WAV files before OGG files before M4A files
+        // which happens to be backwards alphabetical order of extensions
         Collections.sort(audioFiles, new Comparator<File>() {
             @Override
             public int compare(File f1, File f2) {
                 String name1 = f1.getName().toLowerCase();
                 String name2 = f2.getName().toLowerCase();
 
-                boolean isOgg1 = name1.endsWith(".ogg");
-                boolean isOgg2 = name2.endsWith(".ogg");
+                String extension1 = name1.substring(name1.lastIndexOf('.'));
+                String extension2 = name2.substring(name2.lastIndexOf('.'));
 
-                // OGG files come first
-                if (isOgg1 && !isOgg2) return -1;
-                if (!isOgg1 && isOgg2) return 1;
-                // Same extension, sort alphabetically
-                return name1.compareTo(name2);
+                if (extension1.equals(extension2)) return name1.compareTo(name2);
+                return extension2.compareTo(extension1);
             }
         });
     }

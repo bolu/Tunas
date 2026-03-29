@@ -66,7 +66,7 @@
                 android:textStyle="bold"
                 android:gravity="center"
                 android:maxLines="1"
-                android:ellipsize="end"
+                android:ellipsize="middle"
                 android:text="No audio file" />
 
             <ScrollView
