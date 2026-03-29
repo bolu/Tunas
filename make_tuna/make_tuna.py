@@ -1,3 +1,4 @@
+from multiprocessing import Barrier
 import madmom
 import numpy as np
 from pydub import AudioSegment
@@ -150,7 +151,7 @@ def fill_ellipsis(sections, bars):
             sections[i][0] = f'Section {i+1}'
     return sections
 
-def detect_bars_transcribe(input_file, output_wav, output_xsc, spec):
+def detect_bars_transcribe(input_file, output_wav, output_xsc, spec, xsc_exists, wav_exists):
     """Detect bars and output in Transcribe format, plus audio with clicks."""
 
     # Check for meters_given mode and validate conditions
@@ -291,7 +292,7 @@ def detect_bars_transcribe(input_file, output_wav, output_xsc, spec):
         write_xsc_file(bar_times, beat_times, output_wav, output_xsc, spec)
 
     # Generate audio with clicks
-    if output_wav:
+    if output_wav and not wav_exists:
         no_click = spec.get('no_click', False)
         if no_click:
             print("\nGenerating audio without clicks...")
@@ -300,12 +301,12 @@ def detect_bars_transcribe(input_file, output_wav, output_xsc, spec):
 
         # Generate downbeat click sound (1000Hz) unless no_click is enabled
         if not no_click:
-            downbeat_click = generate_click(1000)
+            bar_click = generate_click(spec.get('bar_click_freq', 1000))
 
             # Overlay downbeat clicks at each bar position
             for bar_time in bar_times:
                 position_ms = int(bar_time * 1000)  # Convert to milliseconds
-                audio = audio.overlay(downbeat_click, position=position_ms)
+                audio = audio.overlay(bar_click, position=position_ms)
 
             # Generate additional beat clicks if beat_click is enabled
             if spec.get('beat_click') and click_beat_times is not None:
@@ -503,7 +504,7 @@ spec = read_spec(spec_file)
 if os.path.exists(wav_file) and os.path.exists(xsc_file):
     regenerate_xsc_from_existing(wav_file, xsc_file, spec)
 else:
-    detect_bars_transcribe(filename, wav_file, xsc_file, spec)
+    detect_bars_transcribe(filename, wav_file, xsc_file, spec, os.path.exists(xsc_file), os.path.exists(wav_file))
 
 # --- Spec file format (.tun) ---
 #
