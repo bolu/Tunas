@@ -265,8 +265,10 @@ def detect_bars_transcribe(input_file, output_wav, output_xsc, spec):
 
                 # Skip to the next bar (meter beats per bar)
                 beat_idx += meter
-
-        bar_times = np.array(bar_times)
+        
+        if spec.get('beat_markers'):
+            for i in range(beat_idx, len(downbeats)):
+                beat_times.append(downbeats[i, 0])
     else:
         # Standard mode: extract bar positions from downbeats
         bar_times = downbeats[downbeats[:, 1] == 1][:, 0]
@@ -364,7 +366,7 @@ def write_xsc_file(bar_times, beat_times, output_wav, output_xsc, spec):
         for i in range(section_length):
             while len(beats_left) and beats_left[-1] < bars_left[-1]:
                 time_str = seconds_to_transcribe_time(beats_left.pop())
-                lines.append(f"B,-1,0,b,1,{time_str}")
+                lines.append(f"B,-1,0,,1,{time_str}")
             time_str = seconds_to_transcribe_time(bars_left.pop())
             marker = 'S' if i == 0 else 'M'
             label = section_name if i == 0 else i+1
@@ -372,7 +374,7 @@ def write_xsc_file(bar_times, beat_times, output_wav, output_xsc, spec):
             lines.append(f"{marker},-1,{generate},{label},1,{time_str}")
     while len(beats_left):
         time_str = seconds_to_transcribe_time(beats_left.pop())
-        lines.append(f"B,-1,0,b,1,{time_str}")
+        lines.append(f"B,-1,0,,1,{time_str}")
     lines.append("SectionEnd,Markers")
     output = "\n".join(lines)
 
