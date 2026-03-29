@@ -1,4 +1,3 @@
-from multiprocessing import Barrier
 import madmom
 import numpy as np
 from pydub import AudioSegment
@@ -51,8 +50,7 @@ def apply_force_equal_spacing(bar_times, force_equal_spacing_intervals):
     if not force_equal_spacing_intervals:
         return bar_times
 
-    # Sort bar times
-    bar_times = np.sort(bar_times)
+    bar_times = sorted(bar_times)
 
     # Process each interval
     for interval in force_equal_spacing_intervals:
@@ -68,8 +66,7 @@ def apply_force_equal_spacing(bar_times, force_equal_spacing_intervals):
             continue
 
         # Find markers within this interval (inclusive)
-        within_interval = (bar_times >= start_time) & (bar_times <= end_time)
-        interval_indices = np.where(within_interval)[0]
+        interval_indices = [i for i, t in enumerate(bar_times) if start_time <= t <= end_time]
 
         if len(interval_indices) < 3:
             # Not enough markers to redistribute, skip
@@ -237,13 +234,25 @@ def detect_bars_transcribe(input_file, output_wav, output_xsc, spec, xsc_exists,
     )
     act = madmom.features.downbeats.RNNDownBeatProcessor()(temp_path)
     downbeats = proc(act)
+    for i in range(5):
+        print(f"{downbeats[i, 0]} {downbeats[i, 1]}")
+
+    shift = spec.get('shift', 0)
+    if shift:
+        downbeats = np.column_stack([
+            downbeats[shift:, 0],   # first column: skip first `shift` rows
+            downbeats[:-shift, 1]   # second column: skip last `shift` rows
+        ])
+        print(f"RNNDownBeatProcessor result shifted by {shift}:")
+        for i in range(5):
+            print(f"{downbeats[i, 0]} {downbeats[i, 1]}")
 
     # Extract bar positions (and subdivision beat times for XSC when beat_markers)
+    bar_times = []
+    beat_times = []
     if meters_given:
         # In meters_given mode, use section definitions to determine bar times
         sections = spec.get('sections')
-        bar_times = []
-        beat_times = []
         beat_idx = 0
 
         for section_name, num_bars, meter_spec in sections:
@@ -272,7 +281,7 @@ def detect_bars_transcribe(input_file, output_wav, output_xsc, spec, xsc_exists,
                 beat_times.append(downbeats[i, 0])
     else:
         # Standard mode: extract bar positions from downbeats
-        bar_times = downbeats[downbeats[:, 1] == 1][:, 0]
+        bar_times = downbeats[downbeats[:, 1] == 1][:, 0].tolist()
         if spec.get('beat_markers'):
             beat_times = downbeats[downbeats[:, 1] > 1][:, 0].tolist()
 
@@ -453,7 +462,7 @@ if len(sys.argv) == 2 and sys.argv[1] == '--test':
     # Test equal spacing
     print("\nTesting equal spacing:")
     # Create test bar times: 1000, 1100, 1150, 1200, 1300 seconds
-    bar_times = np.array([1000.0, 1100.0, 1150.0, 1200.0, 1300.0])
+    bar_times = [1000.0, 1100.0, 1150.0, 1200.0, 1300.0]
     # Use time strings that correspond to 960.4s to 1260.4s (0:16.40 to 0:21.40)
     intervals = [['0:16.40', '0:21.40']]
 
@@ -466,11 +475,12 @@ if len(sys.argv) == 2 and sys.argv[1] == '--test':
     # First=1000, last=1200, intermediates=1100,1150 (2 intermediates)
     # Time span = 1200 - 1000 = 200s, spacing = 200/(2+1) = 66.666...
     # Intermediates at: 1000 + 66.67 = 1066.67, 1000 + 133.33 = 1133.33
-    expected = np.array([1000.0, 1066.67, 1133.33, 1200.0, 1300.0])
+    expected = [1000.0, 1066.67, 1133.33, 1200.0, 1300.0]
     print(f"  Expected: {expected}")
 
     # Check if results match expected (within tolerance)
-    if np.allclose(result, expected, atol=0.1):
+    # Do elementwise float comparison without numpy
+    if all(abs(r - e) <= 0.1 for r, e in zip(result, expected)):
         print("  ✓ Equal spacing test passed!")
     else:
         print("  ✗ Equal spacing test failed!")
