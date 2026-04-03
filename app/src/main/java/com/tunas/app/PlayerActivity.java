@@ -1192,6 +1192,19 @@ public class PlayerActivity extends AppCompatActivity {
             LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         sectionText.setLayoutParams(textParams);
         sectionText.setTag(Integer.valueOf(sectionStartBarIndex));
+        sectionText.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                Object tag = v.getTag();
+                if (!(tag instanceof Integer)) {
+                    return;
+                }
+                int sectionStart = (Integer) tag;
+                int sectionEnd = findSectionEndBarInclusive(sectionStart);
+                Log.d("Tunas", "section header tapped: selecting section from " + sectionStart + " to " + sectionEnd);
+                handlePlaybackAfterSelectionChange(sectionStart, sectionEnd, 0, 11);
+            }
+        });
 
         sectionText.setOnLongClickListener(new View.OnLongClickListener() {
             @Override
@@ -1440,61 +1453,30 @@ public class PlayerActivity extends AppCompatActivity {
     }
 
     private void handlePlaybackAfterSelectionChange(int newStartBar, int newEndBar, int newStartTwelfths, int newEndTwelfths) {
-        // Capture current state before making changes
-        int oldStartBar = selectionStartBar;
-        int oldEndBar = selectionEndBar;
-        int oldStartTwelfths = selectionStartTwelfths;
-        int oldEndTwelfths = selectionEndTwelfths;
-        boolean wasPlaying = exoPlayer.isPlaying();
-        long positionInCurrentSegment = getCurrentPositionInSegment();
-
-        // Update selection and highlighting
-        highlightBars(newStartBar, newEndBar, newStartTwelfths, newEndTwelfths);
-
-        // Determine playback continuation strategy
-        boolean pointAChanged = (oldStartBar != newStartBar) || (oldStartTwelfths != newStartTwelfths);
-        boolean selectionExpanded = !pointAChanged && ((newEndBar > oldEndBar) || (newEndBar == oldEndBar && newEndTwelfths > oldEndTwelfths));
-
-        long seekPosition;
-        boolean shouldContinue;
-
-        if (selectionExpanded && wasPlaying) {
-            // Selection expanded, continue from current position
-            seekPosition = positionInCurrentSegment;
-            shouldContinue = true;
-        } else if (!pointAChanged && wasPlaying) {
-            // Long press adjustment - check if current position is within new selection
-            long selectionStartTime = calculateSelectionStartMs();
-            long selectionEndTime = calculateSelectionEndMs();
-
-            long absolutePositionInOldSelection = currentMediaSourceStartMs + positionInCurrentSegment;
-            boolean isWithinNewSelection = absolutePositionInOldSelection >= selectionStartTime &&
-                                         absolutePositionInOldSelection < selectionEndTime;
-
-            if (isWithinNewSelection) {
-                seekPosition = absolutePositionInOldSelection - selectionStartTime;
-                shouldContinue = true;
-            } else {
-                seekPosition = 0;
-                shouldContinue = false;
-            }
-        } else {
-            // Point A changed or wasn't playing
-            seekPosition = 0;
-            shouldContinue = false;
+        boolean wasPlaying = exoPlayer != null && exoPlayer.isPlaying();
+        long absolutePlaybackMs = 0L;
+        if (wasPlaying) {
+            absolutePlaybackMs = currentMediaSourceStartMs + getCurrentPositionInSegment();
         }
 
-        // Update media source
+        highlightBars(newStartBar, newEndBar, newStartTwelfths, newEndTwelfths);
         updateMediaSource();
 
-        // Handle playback
-        if (shouldContinue) {
-            exoPlayer.seekTo(seekPosition);
+        if (wasPlaying && exoPlayer != null) {
+            long newStartMs = calculateSelectionStartMs();
+            long newEndMs = calculateSelectionEndMs();
+            if (absolutePlaybackMs >= newStartMs && absolutePlaybackMs < newEndMs) {
+                long seekMs = absolutePlaybackMs - newStartMs;
+                exoPlayer.seekTo(seekMs);
+                exoPlayer.play();
+                isStopped = false;
+                Log.d("Tunas", "handleSelectionChange: continuing playback at " + seekMs + "ms within new selection");
+                return;
+            }
         }
-        exoPlayer.play();
-        isStopped = false;
-        Log.d("Tunas", "handleSelectionChange: " +
-              (shouldContinue ? "continuing at " + seekPosition + "ms" : "starting from beginning"));
+
+        isStopped = true;
+        Log.d("Tunas", "handleSelectionChange: selection updated without continuing playback");
     }
 
     private void onBarClicked(int barIndex) {
@@ -1522,50 +1504,22 @@ public class PlayerActivity extends AppCompatActivity {
             return;
         }
 
-        // Check if there's any partial selection (selection doesn't align to bar boundaries)
-        boolean hasPartialSelection = (selectionStartTwelfths > 0) || (selectionEndTwelfths < 11);
+        boolean isSameSingleBarSelection =
+            selectionStartBar == barIndex &&
+            selectionEndBar == barIndex &&
+            selectionStartTwelfths == 0 &&
+            selectionEndTwelfths == 11;
 
-        int startBar, endBar;
-
-        if (hasPartialSelection) {
-            // If there's any partial selection, clicking any bar selects just that bar fully
-            startBar = barIndex;
-            endBar = barIndex;
-            Log.d("Tunas", "onBarClicked: partial selection detected, selecting single bar " + barIndex + " fully");
-        } else {
-            // Normal expansion logic when selection is aligned to bar boundaries
-            int numBars = barPositions.size();
-
-            if (selectionStartBar == barIndex && selectionEndBar == barIndex) {
-                // Currently single bar selected, expand to 2 bars
-                startBar = barIndex;
-                endBar = Math.min(barIndex + 1, numBars - 1);
-                Log.d("Tunas", "onBarClicked: single bar selected, expanding to 2 bars: " + startBar + " to " + endBar);
-            } else if (selectionStartBar == barIndex && selectionEndBar == barIndex + 1) {
-                // Currently 2 bars selected, expand to 4 bars
-                startBar = barIndex;
-                endBar = Math.min(barIndex + 3, numBars - 1);
-                Log.d("Tunas", "onBarClicked: 2 bars selected, expanding to 4 bars: " + startBar + " to " + endBar);
-            } else if (selectionStartBar == barIndex && selectionEndBar == barIndex + 3) {
-                // Currently 4 bars selected, expand to 8 bars
-                startBar = barIndex;
-                endBar = Math.min(barIndex + 7, numBars - 1);
-                Log.d("Tunas", "onBarClicked: 4 bars selected, expanding to 8 bars: " + startBar + " to " + endBar);
-            } else if (selectionStartBar == barIndex && selectionEndBar == barIndex + 7) {
-                // Currently 8 bars selected, expand to end of file
-                startBar = barIndex;
-                endBar = numBars - 1;
-                Log.d("Tunas", "onBarClicked: 8 bars selected, expanding to end of file: " + startBar + " to " + endBar);
-            } else {
-                // Any other selection state, start over with single bar
-                startBar = barIndex;
-                endBar = barIndex;
-                Log.d("Tunas", "onBarClicked: other selection state, selecting single bar " + barIndex);
-            }
+        // Tapping an already selected single bar starts playback (no selection change).
+        if (isSameSingleBarSelection) {
+            Log.d("Tunas", "onBarClicked: single selected bar tapped again, starting playback");
+            startPlaybackFromBarBeginning(barIndex);
+            return;
         }
 
-        // Handle the selection change with all associated logic
-        handlePlaybackAfterSelectionChange(startBar, endBar, 0, 11);
+        // Otherwise select just the tapped bar and do not auto-start playback.
+        Log.d("Tunas", "onBarClicked: selecting single bar " + barIndex);
+        handlePlaybackAfterSelectionChange(barIndex, barIndex, 0, 11);
     }
 
     private boolean isBarBeginningInSelection(int barIndex) {
@@ -1659,19 +1613,32 @@ public class PlayerActivity extends AppCompatActivity {
             return;
         }
 
-        // Set the long-clicked bar as point B (end of selection), keep point A unchanged
-        int newEndBar = barIndex;
-
-        // Ignore if user tries to set point B before point A
-        if (newEndBar < selectionStartBar) {
-            Log.d("Tunas", "onBarLongClicked: ignoring attempt to set end before start");
+        if (barIndex < selectionStartBar) {
+            Log.d("Tunas", "onBarLongClicked: extending selection start to " + barIndex +
+                  ", end remains " + selectionEndBar);
+            handlePlaybackAfterSelectionChange(barIndex, selectionEndBar, 0, selectionEndTwelfths);
             return;
         }
 
-        Log.d("Tunas", "onBarLongClicked: setting end bar to " + newEndBar + ", start remains " + selectionStartBar);
+        Log.d("Tunas", "onBarLongClicked: setting end bar to " + barIndex +
+              ", start remains " + selectionStartBar);
+        handlePlaybackAfterSelectionChange(selectionStartBar, barIndex, selectionStartTwelfths, 11);
+    }
 
-        // Handle the selection change with all associated logic
-        handlePlaybackAfterSelectionChange(selectionStartBar, newEndBar, selectionStartTwelfths, 11);
+    private int findSectionEndBarInclusive(int sectionStartBarIndex) {
+        if (barPositions == null || barPositions.isEmpty()) {
+            return sectionStartBarIndex;
+        }
+        int fallbackEnd = barPositions.size() - 1;
+        if (isSectionMarker == null || isSectionMarker.size() != barPositions.size()) {
+            return fallbackEnd;
+        }
+        for (int i = sectionStartBarIndex + 1; i < isSectionMarker.size(); i++) {
+            if (isSectionMarker.get(i)) {
+                return i - 1;
+            }
+        }
+        return fallbackEnd;
     }
 
     private File getXscFileForAudioIndex(int audioIndex) {
@@ -2253,7 +2220,7 @@ public class PlayerActivity extends AppCompatActivity {
                 boolean wholeTuneSelected = (selectionStartBar == 0 && selectionEndBar == numBars - 1);
 
                 if (wholeTuneSelected) {
-                    // Select 4 bars starting from current bar
+                    // Select 4 bars ending on current bar; in the first 3 bars, use first 4 bars of tune
                     long positionInSegment = getCurrentPositionInSegment();
                     long absoluteMs = currentMediaSourceStartMs + positionInSegment;
                     int currentBarIndex = -1;
@@ -2267,8 +2234,15 @@ public class PlayerActivity extends AppCompatActivity {
                     if (currentBarIndex < 0) {
                         currentBarIndex = 0;
                     }
-                    int startBar = currentBarIndex;
-                    int endBar = Math.min(currentBarIndex + 3, numBars - 1);
+                    int startBar;
+                    int endBar;
+                    if (currentBarIndex < 3) {
+                        startBar = 0;
+                        endBar = Math.min(3, numBars - 1);
+                    } else {
+                        endBar = currentBarIndex;
+                        startBar = currentBarIndex - 3;
+                    }
                     highlightBars(startBar, endBar, 0, 11);
                     handlePlaybackAfterSelectionChange(startBar, endBar, 0, 11);
                 } else {
