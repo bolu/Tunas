@@ -767,6 +767,108 @@ public class AudioLoopUtils {
         return mediaSource;
     }
 
+    /**
+     * Creates an alternating loop where each cycle is:
+     *   [selected music segment] + [metronome segment with same duration]
+     *
+     * The generated metronome uses 4/4 timing with an accented click on bar beginnings
+     * and quieter clicks on other beats.
+     */
+    public static ProgressiveMediaSource createAlternatingLoopedPcmMediaSource(
+            Context context,
+            File audioFile,
+            long startMs,
+            long endMs,
+            int loopCount,
+            long[] barOffsetsMs) throws IOException {
+        Log.d("Tunas", "createAlternatingLoopedPcmMediaSource: startMs=" + startMs +
+                ", endMs=" + endMs + ", loopCount=" + loopCount +
+                ", barOffsetsCount=" + (barOffsetsMs != null ? barOffsetsMs.length : 0));
+
+        int sampleRate = getSampleRate(audioFile);
+        int channelCount = getChannelCount(audioFile);
+
+        byte[] musicPcmData = decodeAudioClipToPcm(audioFile, startMs, endMs);
+        musicPcmData = applyLoopFades(musicPcmData, sampleRate, channelCount);
+
+        byte[] metronomePcmData = createMetronomePcmSegment(
+                musicPcmData.length, sampleRate, channelCount, barOffsetsMs);
+
+        byte[] cyclePcmData = new byte[musicPcmData.length + metronomePcmData.length];
+        System.arraycopy(musicPcmData, 0, cyclePcmData, 0, musicPcmData.length);
+        System.arraycopy(metronomePcmData, 0, cyclePcmData, musicPcmData.length, metronomePcmData.length);
+
+        byte[] loopedWavData = createLoopedWavData(cyclePcmData, sampleRate, channelCount, loopCount);
+        SimpleDataSourceFactory factory = new SimpleDataSourceFactory(loopedWavData);
+        MediaItem mediaItem = new MediaItem.Builder()
+                .setUri("looped_audio_alternating")
+                .build();
+        return new ProgressiveMediaSource.Factory(factory).createMediaSource(mediaItem);
+    }
+
+    private static byte[] createMetronomePcmSegment(
+            int pcmByteLength,
+            int sampleRate,
+            int channelCount,
+            long[] barOffsetsMs) {
+        int bytesPerFrame = channelCount * 2;
+        if (pcmByteLength <= 0 || bytesPerFrame <= 0) {
+            return new byte[0];
+        }
+
+        byte[] metronome = new byte[pcmByteLength];
+        int totalFrames = pcmByteLength / bytesPerFrame;
+        int clickFrames = Math.max(1, (int) (sampleRate * 0.05)); // 50ms clicks
+
+        if (barOffsetsMs == null || barOffsetsMs.length < 2) {
+            long[] fallback = new long[]{0L, Math.max(1L, Math.round((1000.0 * totalFrames) / sampleRate))};
+            barOffsetsMs = fallback;
+        }
+
+        int barCount = barOffsetsMs.length - 1;
+        for (int barIndex = 0; barIndex < barCount; barIndex++) {
+            long barStartMs = barOffsetsMs[barIndex];
+            long barEndMs = barOffsetsMs[barIndex + 1];
+            if (barEndMs <= barStartMs) {
+                continue;
+            }
+
+            double barDurationMs = (double) (barEndMs - barStartMs);
+            for (int beatInBar = 0; beatInBar < 4; beatInBar++) {
+                double beatStartMs = barStartMs + (barDurationMs * beatInBar / 4.0);
+                int startFrame = (int) Math.round((beatStartMs * sampleRate) / 1000.0);
+                if (startFrame >= totalFrames) {
+                    continue;
+                }
+
+                boolean isBarStart = beatInBar == 0;
+                double frequencyHz = isBarStart ? 1760.0 : 880.0;
+                double amplitude = isBarStart ? 0.65 : 0.45;
+                int thisClickFrames = Math.min(clickFrames, totalFrames - startFrame);
+
+                for (int i = 0; i < thisClickFrames; i++) {
+                    int frameIndex = startFrame + i;
+                    double t = (double) i / (double) sampleRate;
+                    double envelope = Math.exp(-6.0 * ((double) i / (double) thisClickFrames));
+                    short sample = (short) Math.round(
+                            Math.sin(2.0 * Math.PI * frequencyHz * t) * amplitude * envelope * 32767.0);
+
+                    int frameByteOffset = frameIndex * bytesPerFrame;
+                    for (int channel = 0; channel < channelCount; channel++) {
+                        int sampleOffset = frameByteOffset + (channel * 2);
+                        int existing = (short) (((metronome[sampleOffset + 1] & 0xFF) << 8) | (metronome[sampleOffset] & 0xFF));
+                        int mixed = existing + sample;
+                        mixed = Math.max(Short.MIN_VALUE, Math.min(Short.MAX_VALUE, mixed));
+                        metronome[sampleOffset] = (byte) (mixed & 0xFF);
+                        metronome[sampleOffset + 1] = (byte) ((mixed >> 8) & 0xFF);
+                    }
+                }
+            }
+        }
+
+        return metronome;
+    }
+
 
     /**
      * Get sample rate from audio file.

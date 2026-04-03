@@ -89,7 +89,10 @@ public class PlayerActivity extends AppCompatActivity {
     private Handler handler = new Handler();
 
     private boolean isStopped = true;
-    private boolean loopOn = false;
+    private static final int LOOP_MODE_OFF = 0;
+    private static final int LOOP_MODE_REPEAT = 1;
+    private static final int LOOP_MODE_ALTERNATING_METRONOME = 2;
+    private int loopMode = LOOP_MODE_OFF;
     private boolean gotoOn = true;
 
     // Position tracking
@@ -636,10 +639,33 @@ public class PlayerActivity extends AppCompatActivity {
                     exoPlayer.pause();
                     isStopped = true;
                 }
-                // Toggle repeat on/off
-                loopOn = !loopOn;
+                // Tap toggles repeat/off; alternating mode also goes directly to off.
+                loopMode = (loopMode == LOOP_MODE_OFF) ? LOOP_MODE_REPEAT : LOOP_MODE_OFF;
                 updateMediaSource();
                 updateLoopButtonState();
+            }
+        });
+
+        loopBtn.setOnLongClickListener(new View.OnLongClickListener() {
+            @Override
+            public boolean onLongClick(View v) {
+                // Long press enters alternating music/metronome mode.
+                // If already in alternating mode, do nothing.
+                if (loopMode == LOOP_MODE_ALTERNATING_METRONOME) {
+                    return true;
+                }
+                if (!canEnterAlternatingMetronomeMode()) {
+                    Log.w("Tunas", "loopBtn long press ignored: alternating mode requires full-bar selection up to 64 bars");
+                    return true;
+                }
+                if (!isStopped) {
+                    exoPlayer.pause();
+                    isStopped = true;
+                }
+                loopMode = LOOP_MODE_ALTERNATING_METRONOME;
+                updateMediaSource();
+                updateLoopButtonState();
+                return true;
             }
         });
     }
@@ -839,8 +865,14 @@ public class PlayerActivity extends AppCompatActivity {
     }
 
     private void updateLoopButtonState() {
-        // Green when enabled, gray when disabled
-        loopBtn.setBackgroundColor(loopOn ? 0xFF4CAF50 : 0xFFE0E0E0); 
+        // Gray: off, Green: repeat, Blue: alternating metronome mode
+        if (loopMode == LOOP_MODE_ALTERNATING_METRONOME) {
+            loopBtn.setBackgroundColor(0xFF2196F3);
+        } else if (loopMode == LOOP_MODE_REPEAT) {
+            loopBtn.setBackgroundColor(0xFF4CAF50);
+        } else {
+            loopBtn.setBackgroundColor(0xFFE0E0E0);
+        }
     }
 
     private void updateGotoButtonState() {
@@ -1286,7 +1318,7 @@ public class PlayerActivity extends AppCompatActivity {
         exoPlayer.setRepeatMode(exoPlayer.REPEAT_MODE_OFF);
 
         long durationMs = endMs - startMs;
-        if (loopOn && durationMs < 60000 && durationMs > 200) {
+        if ((loopMode != LOOP_MODE_OFF) && durationMs < 60000 && durationMs > 200) {
             try {
                 // Calculate number of repeats to not exceed 5 minutes total
                 int repeats;
@@ -1295,8 +1327,14 @@ public class PlayerActivity extends AppCompatActivity {
                 repeats = Math.min(repeats, 20); // Cap at 20 repeats maximum
                 repeats = Math.max(repeats, 2); // At least 2 repeats
 
-                exoPlayer.setMediaSource(AudioLoopUtils.createLoopedPcmMediaSource(
-                    this, audioFiles.get(currentAudioIndex), startMs, endMs, repeats));
+                if (loopMode == LOOP_MODE_ALTERNATING_METRONOME) {
+                    long[] selectedBarOffsetsMs = buildSelectedBarOffsetsMs(startMs, endMs);
+                    exoPlayer.setMediaSource(AudioLoopUtils.createAlternatingLoopedPcmMediaSource(
+                        this, audioFiles.get(currentAudioIndex), startMs, endMs, repeats, selectedBarOffsetsMs));
+                } else {
+                    exoPlayer.setMediaSource(AudioLoopUtils.createLoopedPcmMediaSource(
+                        this, audioFiles.get(currentAudioIndex), startMs, endMs, repeats));
+                }
             } catch (IOException e) {
                 throw new RuntimeException(e);
             }
@@ -1359,6 +1397,46 @@ public class PlayerActivity extends AppCompatActivity {
         long currentPosition = exoPlayer.getCurrentPosition();
         return (currentSegmentDurationMs > 0) ?
             (currentPosition % currentSegmentDurationMs) : currentPosition;
+    }
+
+    private boolean canEnterAlternatingMetronomeMode() {
+        if (barPositions == null || barPositions.isEmpty()) {
+            return false;
+        }
+        if (selectionStartBar < 0 || selectionEndBar < selectionStartBar || selectionEndBar >= barPositions.size()) {
+            return false;
+        }
+        if (selectionStartTwelfths != 0 || selectionEndTwelfths != 11) {
+            return false;
+        }
+        int selectedBars = (selectionEndBar - selectionStartBar) + 1;
+        return selectedBars <= 64;
+    }
+
+    private long[] buildSelectedBarOffsetsMs(long selectionStartMs, long selectionEndMs) {
+        if (barPositions == null || barPositions.isEmpty() || selectionStartBar < 0 || selectionEndBar < selectionStartBar) {
+            return new long[]{0L, Math.max(1L, selectionEndMs - selectionStartMs)};
+        }
+
+        int selectedBars = (selectionEndBar - selectionStartBar) + 1;
+        long[] offsetsMs = new long[selectedBars + 1];
+        long prevOffsetMs = -1L;
+        for (int i = 0; i < selectedBars; i++) {
+            long absoluteBarStartMs = barPositions.get(selectionStartBar + i);
+            long offsetMs = Math.max(0L, absoluteBarStartMs - selectionStartMs);
+            if (offsetMs <= prevOffsetMs) {
+                offsetMs = prevOffsetMs + 1L;
+            }
+            prevOffsetMs = offsetsMs[i] = offsetMs;
+        }
+
+        long totalDurationMs = Math.max(1L, selectionEndMs - selectionStartMs);
+        if (totalDurationMs <= prevOffsetMs) {
+            totalDurationMs = prevOffsetMs + 1L;
+        }
+        offsetsMs[selectedBars] = totalDurationMs;
+
+        return offsetsMs;
     }
 
     private void handlePlaybackAfterSelectionChange(int newStartBar, int newEndBar, int newStartTwelfths, int newEndTwelfths) {
@@ -2008,7 +2086,7 @@ public class PlayerActivity extends AppCompatActivity {
             @Override
             public void onPlaybackStateChanged(int playbackState) {
                 Log.d("Tunas", "onPlaybackStateChanged: state=" + playbackState + " (0=IDLE, 1=BUFFERING, 2=READY, 3=ENDED)");
-                if (playbackState == Player.STATE_ENDED && !loopOn) {
+                if (playbackState == Player.STATE_ENDED && loopMode == LOOP_MODE_OFF) {
                     // Playback naturally ended and looping is disabled, so mark as stopped
                     isStopped = true;
                     Log.d("Tunas", "onPlaybackStateChanged: playback ended, setting isStopped=true");
