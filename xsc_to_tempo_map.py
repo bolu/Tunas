@@ -115,9 +115,11 @@ def _pairs(markers: list[dict], types: list[str]) -> list[tuple[float, float]]:
     return pairs
 
 
-def derive_tempo_map(markers: list[dict], beats_per_bar: int = 4) -> list[tuple[float, int]]:
+def derive_tempo_map(markers: list[dict], beats_per_bar: int = 4) -> list[tuple]:
     """
-    Returns [(time_seconds, microseconds_per_beat), ...] sorted by time.
+    Returns a single event list sorted by time. Each item is one of:
+      - ('tempo', time_seconds, microseconds_per_beat)
+      - ('timesig', time_seconds, numerator, denominator)
 
     Strategy:
       - S (section) markers are treated as bar downbeats, equivalent to M.
@@ -136,7 +138,18 @@ def derive_tempo_map(markers: list[dict], beats_per_bar: int = 4) -> list[tuple[
         beat_scale = 1  # each interval is one beat
 
     valid_pairs = _pairs(markers, types)
-    tempo_events = []
+    events = []
+
+    # If the first marker does not start at 0, insert a synthetic single-beat
+    # lead-in so the musical grid reaches that first marker correctly.
+    first_marker_time = markers[0]['seconds']
+    if first_marker_time > 0:
+        lead_in_us_per_beat = round(first_marker_time * 1_000_000)
+        events.append(('timesig', 0.0, 1, 4))
+        events.append(('tempo', 0.0, lead_in_us_per_beat))
+        events.append(('timesig', first_marker_time, 4, 4))
+    else:
+        events.append(('timesig', 0.0, 4, 4))
 
     for t0, t1 in valid_pairs:
         interval = t1 - t0
@@ -147,13 +160,25 @@ def derive_tempo_map(markers: list[dict], beats_per_bar: int = 4) -> list[tuple[
         if us_per_beat <= 0:
             print(f"  Invalid tempo {us_per_beat} us/beat at {t0:.3f}s, exiting")
             sys.exit(1)
-        tempo_events.append((t0, us_per_beat))
+        events.append(('tempo', t0, us_per_beat))
 
-    if not tempo_events:
+    if not any(e[0] == 'tempo' for e in events):
         print("  No tempo events, exiting")
         sys.exit(1)
 
-    return tempo_events
+    # Events should already be generated in-order; fail fast if not.
+    for i in range(1, len(events)):
+        prev = events[i - 1]
+        curr = events[i]
+        prev_key = (prev[1], 0 if prev[0] == 'timesig' else 1)
+        curr_key = (curr[1], 0 if curr[0] == 'timesig' else 1)
+        if curr_key < prev_key:
+            print(
+                "  Internal error: derived events are out of order, exiting "
+                f"(index {i - 1}: {prev}, index {i}: {curr})"
+            )
+            sys.exit(1)
+    return events
 
 
 # ---------------------------------------------------------------------------
@@ -175,28 +200,27 @@ def _var_len(value: int) -> bytes:
     return bytes(result)
 
 
-def _set_tempo_event(delta_ticks: int, microseconds_per_beat: int) -> bytes:
+def _set_tempo_event(ticks: int, microseconds_per_beat: int) -> bytes:
     """Build a Set Tempo meta-event."""
-    delta = _var_len(delta_ticks)
+    delta = _var_len(ticks)
     tempo_bytes = struct.pack('>I', microseconds_per_beat)[1:]  # 3 bytes
     return delta + b'\xFF\x51\x03' + tempo_bytes
 
 
-def _end_of_track_event(delta_ticks: int = 0) -> bytes:
-    return _var_len(delta_ticks) + b'\xFF\x2F\x00'
+def _end_of_track_event(ticks: int = 0) -> bytes:
+    return _var_len(ticks) + b'\xFF\x2F\x00'
 
 
-def _time_sig_event(delta_ticks: int, numerator=4, denominator=4) -> bytes:
+def _time_sig_event(ticks: int, numerator=4, denominator=4) -> bytes:
     """4/4 time signature meta-event (denominator encoded as power of 2)."""
     denom_pow = {1: 0, 2: 1, 4: 2, 8: 3, 16: 4}.get(denominator, 2)
-    delta = _var_len(delta_ticks)
+    delta = _var_len(ticks)
     return delta + b'\xFF\x58\x04' + bytes([numerator, denom_pow, 24, 8])
 
 
 def write_tempo_midi(
-    tempo_events: list[tuple[float, int]],
+    map_events: list[tuple],
     out_path: str,
-    ticks_per_event: int,
 ):
     """
     Write a Type 1 MIDI file with tempo/time-sig meta-events on track 0
@@ -211,35 +235,52 @@ def write_tempo_midi(
     # --- Track 0: tempo map ---
     tempo_track = bytearray()
 
-    # Opening time signature (4/4)
-    tempo_track += _time_sig_event(0)
     print("  Writing MIDI events:")
-    print("    [TS] Track 0 @ tick 0: META TimeSignature 4/4")
 
-    tick_events = [
-        (i * ticks_per_event, uspb)
-        for i, (_seconds, uspb) in enumerate[tuple[float, int]](tempo_events)
-    ]
+    abs_tick = 0
+    delta = 0
+    next_delta = 0
+    printed_tempo = 0
+    skipped_tempo = 0
 
-    prev_tick = 0
-    printed_main_loop = 0
-    for abs_tick, uspb in tick_events:
-        delta = abs_tick - prev_tick
-        tempo_track += _set_tempo_event(delta, uspb)
-        if printed_main_loop < 10:
-            bpm = 60_000_000.0 / uspb
+    for event in map_events:
+        etype = event[0]
+
+        if etype == 'timesig':
+            _, _, numerator, denominator = event
+            tempo_track += _time_sig_event(delta, numerator=numerator, denominator=denominator)
             print(
-                f"    [{printed_main_loop + 1:2d}] Track 0 @ tick {abs_tick}: "
-                f"META SetTempo {uspb} us/beat ({bpm:.2f} BPM)"
+                f"    [TS] Track 0 @ tick {abs_tick}: "
+                f"META TimeSignature {numerator}/{denominator}"
             )
-            printed_main_loop += 1
-        prev_tick = abs_tick
+            delta = 0  # tempo event will follow. we want it after 0 ticks (in same place)
+            next_delta = TICKS_PER_BEAT * numerator  # then another event will follow, after this number of ticks
+        elif etype == 'tempo':
+            _, _, uspb = event
+            tempo_track += _set_tempo_event(delta, uspb)
+            if printed_tempo < 10:
+                bpm = 60_000_000.0 / uspb
+                print(
+                    f"    [{printed_tempo + 1:2d}] Track 0 @ tick {abs_tick}: "
+                    f"META SetTempo {uspb} us/beat ({bpm:.2f} BPM)"
+                )
+                printed_tempo += 1
+            else:
+                skipped_tempo += 1
+            abs_tick += delta
+            delta = next_delta
+        else:
+            print(f"  Internal error: unknown event type {etype}, exiting")
+            sys.exit(1)
 
-    if len(tick_events) > 10:
-        print(f"    ... and {len(tick_events) - 10} more tempo events")
+        abs_tick += delta
+        prev_delta = delta
+
+    if skipped_tempo > 0:
+        print(f"    ... and {skipped_tempo} more tempo events")
 
     tempo_track += _end_of_track_event(0)
-    print(f"    [E0] Track 0 @ tick {prev_tick}: META EndOfTrack")
+    print(f"    [E0] Track 0 @ tick {abs_tick}: META EndOfTrack")
 
     # --- Track 1: empty placeholder (required for Type 1) ---
     empty_track = bytearray()
@@ -284,16 +325,28 @@ def main():
     sects  = [m for m in markers if m['type'] == 'S']
     print(f"  Found {len(sects)} section, {len(meas)} measure, {len(beats)} beat markers")
 
-    tempo_map = derive_tempo_map(markers)
-    print(f"  Derived {len(tempo_map)} tempo event(s):")
-    for t, uspb in tempo_map[:10]:
-        print(f"    {t:8.3f}s  →  {uspb} us/beat")
-    if len(tempo_map) > 10:
-        print(f"    ... and {len(tempo_map) - 10} more")
+    map_events = derive_tempo_map(markers)
+    tempo_events = [e for e in map_events if e[0] == 'tempo']
+    timesig_events = [e for e in map_events if e[0] == 'timesig']
+    print(
+        f"  Derived {len(map_events)} total event(s): "
+        f"{len(tempo_events)} tempo, {len(timesig_events)} time signature"
+    )
+    for e in map_events[:10]:
+        if e[0] == 'tempo':
+            _, t, uspb = e
+            print(f"    {t:8.3f}s  →  Tempo {uspb} us/beat")
+        else:
+            _, t, num, den = e
+            print(f"    {t:8.3f}s  →  TimeSig {num}/{den}")
+    if len(map_events) > 10:
+        print(f"    ... and {len(map_events) - 10} more")
 
     has_beats = len(beats) > 0
-    ticks_per_event = TICKS_PER_BEAT if has_beats else (TICKS_PER_BEAT * 4)
-    write_tempo_midi(tempo_map, mid_path, ticks_per_event)
+    if has_beats:
+        print(f"  Not supported: beat markers, exiting")
+        sys.exit(1)
+    write_tempo_midi(map_events, mid_path)
 
     print()
     print("To import into Reaper:")
