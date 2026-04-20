@@ -35,6 +35,7 @@ def parse_time_format(time_str):
 
 def seconds_to_transcribe_time(seconds):
     """Convert seconds to Transcribe format: H:MM:SS.microseconds"""
+    if isinstance(seconds, str): return seconds
     hours = int(seconds // 3600)
     minutes = int((seconds % 3600) // 60)
     secs = int(seconds % 60)
@@ -371,15 +372,24 @@ def write_xsc_file(bar_times, beat_times, output_wav, output_xsc, spec):
     beats_left.reverse()
 
     sections = fill_ellipsis(sections, len(bar_times))
+    meters_given = spec.get('meters_given', False)
+
     for section in sections:
         section_name, section_length = section[:2]
+        if meters_given:
+            section_meters = section[2]
+            if not isinstance(section_meters, list): 
+                section_meters = [section_meters] * section_length
         for i in range(section_length):
             while len(beats_left) and beats_left[-1] < bars_left[-1]:
                 time_str = seconds_to_transcribe_time(beats_left.pop())
                 lines.append(f"B,-1,0,,1,{time_str}")
             time_str = seconds_to_transcribe_time(bars_left.pop())
             marker = 'S' if i == 0 else 'M'
-            label = section_name if i == 0 else i+1
+            label = section_name if i == 0 else str(i+1)
+            if meters_given:
+                meter = section_meters[i]
+                if meter != 4: label += f"|{meter}"
             generate = 0
             lines.append(f"{marker},-1,{generate},{label},1,{time_str}")
     while len(beats_left):
@@ -397,7 +407,7 @@ def regenerate_xsc_from_existing(wav_file, xsc_file, spec):
     """Regenerate .xsc file from existing markers when both .wav and .xsc files exist."""
     if spec.get('beat_markers'):
         print("Error: XSC regeneration is not supported when beat_markers is enabled.")
-        print("Turn off beat_markers in the .tun spec, or delete the .xsc (and optionally .wav) to rebuild from the source audio.")
+        print("Turn off beat_markers in the .tun spec, or delete the .xsc or .wav to rebuild from the source audio.")
         sys.exit(1)
 
     print("Both .wav and .xsc files already exist. Regenerating .xsc file from existing markers...")

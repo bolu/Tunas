@@ -54,12 +54,12 @@ def parse_xsc(path: str) -> list[dict]:
     in_markers = False
 
     marker_line = re.compile(
-        r'^([SMB])\s*,\s*'       # type
-        r'-?\d+\s*,\s*'          # a number
-        r'-?\d+\s*,\s*'          # auto-name flag
-        r'([^,]*)\s*,\s*'        # label (may be empty)
-        r'-?\d+\s*,\s*'          # subdivision count, 1 means no subdivision, 0 means same as previous
-        r'(\d+:\d+:\d+\.\d+)',   # timestamp  H:MM:SS.mmm
+        r'^([SMB])\s*,\s*'             # type
+        r'-?\d+\s*,\s*'                # a number
+        r'-?\d+\s*,\s*'                # auto-name flag
+        r'([^,|]*)(\|(\d+))?\s*,\s*'   # label (may be empty, with optional meter)
+        r'-?\d+\s*,\s*'                # subdivision count, 1 means no subdivision, 0 means same as previous
+        r'(\d+:\d+:\d+\.\d+)',         # timestamp  H:MM:SS.mmm
         re.IGNORECASE
     )
 
@@ -78,9 +78,11 @@ def parse_xsc(path: str) -> list[dict]:
             if m:
                 mtype  = m.group(1).upper()
                 label  = m.group(2).strip()
-                ts_str = m.group(3)   # H:MM:SS.mmm
+                meter  = m.group(4)
+                ts_str = m.group(5)   # H:MM:SS.mmm
                 seconds = _ts_to_seconds(ts_str)
-                markers.append({'type': mtype, 'seconds': seconds, 'label': label})
+                meter = (4 if meter is None else int(meter))
+                markers.append({'type': mtype, 'seconds': seconds, 'label': label, 'meter': meter})
 
     markers.sort(key=lambda x: x['seconds'])
     return markers
@@ -99,18 +101,20 @@ def _ts_to_seconds(ts: str) -> float:
 # Tempo map derivation
 # ---------------------------------------------------------------------------
 
-def _pairs(markers: list[dict], types: list[str]) -> list[tuple[float, float]]:
+def _pairs(markers: list[dict], types: list[str]) -> list[tuple[float, float, int]]:
     """
-    Return (t0, t1) time pairs for consecutive markers of given types.
+    Return (t0, t1, m) time pairs (with meter) for consecutive markers of given types.
     """
     pairs = []
     last_time = None
+    last_meter = None
 
     for m in markers:
         if m['type'] in types:
             if last_time is not None:
-                pairs.append((last_time, m['seconds']))
+                pairs.append((last_time, m['seconds'], last_meter))
             last_time = m['seconds']
+            last_meter = m['meter']
 
     return pairs
 
@@ -130,12 +134,10 @@ def derive_tempo_map(markers: list[dict], beats_per_bar: int = 4) -> list[tuple]
         (assumed 4/4).
     """
     types = ['S', 'M']
-    beat_scale = beats_per_bar  # each interval is one bar (assume 4/4)
 
     has_beats = any(m['type'] == 'B' for m in markers)
     if has_beats:
         types.append('B')
-        beat_scale = 1  # each interval is one beat
 
     valid_pairs = _pairs(markers, types)
     events = []
@@ -143,23 +145,28 @@ def derive_tempo_map(markers: list[dict], beats_per_bar: int = 4) -> list[tuple]
     # If the first marker does not start at 0, insert a synthetic single-beat
     # lead-in so the musical grid reaches that first marker correctly.
     first_marker_time = markers[0]['seconds']
+    meter = markers[0]['meter']
     if first_marker_time > 0:
         lead_in_us_per_beat = round(first_marker_time * 1_000_000)
         events.append(('timesig', 0.0, 1, 4))
         events.append(('tempo', 0.0, lead_in_us_per_beat))
-        events.append(('timesig', first_marker_time, 4, 4))
+        events.append(('timesig', first_marker_time, meter, 4 if meter < 8 else 8))
     else:
-        events.append(('timesig', 0.0, 4, 4))
+        events.append(('timesig', 0.0, meter, 4 if meter < 8 else 8))
 
-    for t0, t1 in valid_pairs:
+    for t0, t1, m in valid_pairs:
         interval = t1 - t0
         if interval <= 0:
             print(f"  Negative interval {interval:.3f}s at {t0:.3f}s, exiting")
             sys.exit(1)
-        us_per_beat = round((interval / beat_scale) * 1_000_000)
+        us_per_beat = round((interval / m) * 1_000_000)
+        if meter >= 8: us_per_beat *= 2
         if us_per_beat <= 0:
             print(f"  Invalid tempo {us_per_beat} us/beat at {t0:.3f}s, exiting")
             sys.exit(1)
+        if m != meter:
+            meter = m
+            events.append(('timesig', t0, meter, 4 if meter < 8 else 8))
         events.append(('tempo', t0, us_per_beat))
 
     if not any(e[0] == 'tempo' for e in events):
@@ -255,6 +262,8 @@ def write_tempo_midi(
             )
             delta = 0  # tempo event will follow. we want it after 0 ticks (in same place)
             next_delta = TICKS_PER_BEAT * numerator  # then another event will follow, after this number of ticks
+            if denominator == 8:
+                next_delta = round(next_delta / 2)
         elif etype == 'tempo':
             _, _, uspb = event
             tempo_track += _set_tempo_event(delta, uspb)
