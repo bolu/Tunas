@@ -101,29 +101,32 @@ def _ts_to_seconds(ts: str) -> float:
 # Tempo map derivation
 # ---------------------------------------------------------------------------
 
-def _pairs(markers: list[dict], types: list[str]) -> list[tuple[float, float, int]]:
+def _pairs(markers: list[dict], types: list[str]) -> list[tuple]:
     """
-    Return (t0, t1, m) time pairs (with meter) for consecutive markers of given types.
+    Return (t0, t1, m, text) time pairs for consecutive markers of given types.
     """
     pairs = []
     last_time = None
     last_meter = None
+    last_text = None
 
     for m in markers:
         if m['type'] in types:
             if last_time is not None:
-                pairs.append((last_time, m['seconds'], last_meter))
+                pairs.append((last_time, m['seconds'], last_meter, last_text))
             last_time = m['seconds']
             last_meter = m['meter']
+            last_text = m['label'] if m['type'] == 'S' else None
 
     return pairs
 
 
 def derive_tempo_map(markers: list[dict], beats_per_bar: int = 4) -> list[tuple]:
     """
-    Returns a single event list sorted by time. Each item is one of:
+    Returns a single event list in generated time order. Each item is one of:
       - ('tempo', time_seconds, microseconds_per_beat)
       - ('timesig', time_seconds, numerator, denominator)
+      - ('text', time_seconds, text)
 
     Strategy:
       - S (section) markers are treated as bar downbeats, equivalent to M.
@@ -154,7 +157,7 @@ def derive_tempo_map(markers: list[dict], beats_per_bar: int = 4) -> list[tuple]
     else:
         events.append(('timesig', 0.0, meter, 4 if meter < 8 else 8))
 
-    for t0, t1, m in valid_pairs:
+    for t0, t1, m, text in valid_pairs:
         interval = t1 - t0
         if interval <= 0:
             print(f"  Negative interval {interval:.3f}s at {t0:.3f}s, exiting")
@@ -167,18 +170,22 @@ def derive_tempo_map(markers: list[dict], beats_per_bar: int = 4) -> list[tuple]
         if m != meter:
             meter = m
             events.append(('timesig', t0, meter, 4 if meter < 8 else 8))
+        if text is not None:
+            events.append(('text', t0, text))
         events.append(('tempo', t0, us_per_beat))
 
     if not any(e[0] == 'tempo' for e in events):
         print("  No tempo events, exiting")
         sys.exit(1)
 
+    event_order = {'timesig': 0, 'text': 1, 'tempo': 2}
+
     # Events should already be generated in-order; fail fast if not.
     for i in range(1, len(events)):
         prev = events[i - 1]
         curr = events[i]
-        prev_key = (prev[1], 0 if prev[0] == 'timesig' else 1)
-        curr_key = (curr[1], 0 if curr[0] == 'timesig' else 1)
+        prev_key = (prev[1], event_order.get(prev[0], 99))
+        curr_key = (curr[1], event_order.get(curr[0], 99))
         if curr_key < prev_key:
             print(
                 "  Internal error: derived events are out of order, exiting "
@@ -193,7 +200,7 @@ def derive_tempo_map(markers: list[dict], beats_per_bar: int = 4) -> list[tuple]
 # ---------------------------------------------------------------------------
 
 TICKS_PER_BEAT = 480   # standard resolution, Reaper handles this well
-
+# TODO rename to TICKS_PER_QUARTER
 
 def _var_len(value: int) -> bytes:
     """Encode an integer as a MIDI variable-length quantity."""
@@ -218,6 +225,12 @@ def _end_of_track_event(ticks: int = 0) -> bytes:
     return _var_len(ticks) + b'\xFF\x2F\x00'
 
 
+def _marker_event(ticks: int, label: str) -> bytes:
+    """Build a Marker meta-event."""
+    label_bytes = label.encode('utf-8')
+    return _var_len(ticks) + b'\xFF\x06' + _var_len(len(label_bytes)) + label_bytes
+
+
 def _time_sig_event(ticks: int, numerator=4, denominator=4) -> bytes:
     """4/4 time signature meta-event (denominator encoded as power of 2)."""
     denom_pow = {1: 0, 2: 1, 4: 2, 8: 3, 16: 4}.get(denominator, 2)
@@ -225,12 +238,14 @@ def _time_sig_event(ticks: int, numerator=4, denominator=4) -> bytes:
     return delta + b'\xFF\x58\x04' + bytes([numerator, denom_pow, 24, 8])
 
 
+
+
 def write_tempo_midi(
     map_events: list[tuple],
     out_path: str,
 ):
     """
-    Write a Type 1 MIDI file with tempo/time-sig meta-events on track 0
+    Write a Type 1 MIDI file with tempo/time-sig/marker meta-events on track 0
     and an empty track 1. Type 1 is required for Reaper to recognise and
     offer to import the tempo map.
 
@@ -249,11 +264,22 @@ def write_tempo_midi(
     next_delta = 0
     printed_tempo = 0
     skipped_tempo = 0
+    printed_text = 0
+    skipped_text = 0
 
     for event in map_events:
         etype = event[0]
 
-        if etype == 'timesig':
+        if etype == 'text':
+            _, _, text = event
+            tempo_track += _marker_event(delta, text)
+            if printed_text < 10:
+                print(f"    [TX] Track 0 @ tick {abs_tick}: META Marker {text!r}")
+                printed_text += 1
+            else:
+                skipped_text += 1
+            delta = 0  # following events at the same musical position should stay there
+        elif etype == 'timesig':
             _, _, numerator, denominator = event
             tempo_track += _time_sig_event(delta, numerator=numerator, denominator=denominator)
             print(
@@ -287,6 +313,8 @@ def write_tempo_midi(
 
     if skipped_tempo > 0:
         print(f"    ... and {skipped_tempo} more tempo events")
+    if skipped_text > 0:
+        print(f"    ... and {skipped_text} more marker events")
 
     tempo_track += _end_of_track_event(0)
     print(f"    [E0] Track 0 @ tick {abs_tick}: META EndOfTrack")
@@ -337,17 +365,22 @@ def main():
     map_events = derive_tempo_map(markers)
     tempo_events = [e for e in map_events if e[0] == 'tempo']
     timesig_events = [e for e in map_events if e[0] == 'timesig']
+    text_events = [e for e in map_events if e[0] == 'text']
     print(
         f"  Derived {len(map_events)} total event(s): "
-        f"{len(tempo_events)} tempo, {len(timesig_events)} time signature"
+        f"{len(tempo_events)} tempo, {len(timesig_events)} time signature, "
+        f"{len(text_events)} marker text"
     )
     for e in map_events[:10]:
         if e[0] == 'tempo':
             _, t, uspb = e
             print(f"    {t:8.3f}s  →  Tempo {uspb} us/beat")
-        else:
+        elif e[0] == 'timesig':
             _, t, num, den = e
             print(f"    {t:8.3f}s  →  TimeSig {num}/{den}")
+        else:
+            _, t, text = e
+            print(f"    {t:8.3f}s  →  Marker {text!r}")
     if len(map_events) > 10:
         print(f"    ... and {len(map_events) - 10} more")
 
@@ -355,6 +388,7 @@ def main():
     if has_beats:
         print(f"  Not supported: beat markers, exiting")
         sys.exit(1)
+
     write_tempo_midi(map_events, mid_path)
 
     print()
